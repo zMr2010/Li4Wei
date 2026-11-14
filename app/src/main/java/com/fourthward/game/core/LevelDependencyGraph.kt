@@ -10,15 +10,23 @@ data class LevelMapWindow(
     /** Includes crossing edges whose other end is just outside the viewport. */
     val edges: List<LevelMapEdge>,
     val layout: PalmPanelSpec,
+    val visibleRows: Int = VISIBLE_ROWS,
 ) {
     fun levelAtSlot(slot: Int): Int? = nodes.getOrNull(slot)?.index
     fun levelForAction(action: PalmAction): Int? = levelAtSlot(PalmPanelLayout.levelActions.indexOf(action))
 
     companion object {
-        const val VISIBLE_ROWS = 3
-        const val NODE_HEIGHT = .145
-        const val BOTTOM_CENTER_Y = .70
-        const val ROW_SPACING = .23
+        const val VISIBLE_ROWS = 6
+        const val WIDTH_DP = 600
+        const val HEIGHT_DP = 680
+        const val WIDTH_METERS = .44
+        const val NODE_HEIGHT = 68.0 / HEIGHT_DP
+        const val BOTTOM_CENTER_Y = 552.0 / HEIGHT_DP
+        const val ROW_SPACING = 88.0 / HEIGHT_DP
+        const val CONTENT_TOP = 70.0 / HEIGHT_DP
+        const val CONTENT_BOTTOM = 592.0 / HEIGHT_DP
+        const val CONTROLS_TOP = 615.0 / HEIGHT_DP
+        const val CONTROLS_BOTTOM = 660.0 / HEIGHT_DP
         fun centerY(row: Int, firstRow: Int): Double = BOTTOM_CENTER_Y - (row - firstRow) * ROW_SPACING
     }
 }
@@ -85,7 +93,9 @@ class LevelDependencyGraph(
             }.map { LevelMapEdge(it, target) }
         }.sortedWith(compareBy<LevelMapEdge> { rows.getValue(it.fromIndex) }.thenBy { it.fromIndex }.thenBy { it.toIndex })
         totalRows = rows.values.max() + 1
-        maxFirstRow = (totalRows - LevelMapWindow.VISIBLE_ROWS).coerceAtLeast(0)
+        // Keep the final row reachable even if a future, wider branch fills the nine input slots.
+        maxFirstRow = ((totalRows - LevelMapWindow.VISIBLE_ROWS).coerceAtLeast(0) until totalRows)
+            .first { first -> nodes.count { it.row >= first } <= PalmPanelLayout.levelActions.size }
     }
 
     /** Full gates, not the reduced set of visible lines. */
@@ -95,7 +105,10 @@ class LevelDependencyGraph(
 
     fun window(firstRow: Int): LevelMapWindow {
         val start = firstRow.coerceIn(0, maxFirstRow)
-        val last = start + LevelMapWindow.VISIBLE_ROWS - 1
+        // Never split a parallel row or silently drop its sibling when the input slots fill up.
+        val rows = (start until minOf(totalRows, start + LevelMapWindow.VISIBLE_ROWS))
+            .takeWhile { row -> nodes.count { it.row in start..row } <= PalmPanelLayout.levelActions.size }
+        val last = rows.last()
         val visible = nodes.filter { it.row in start..last }
         val nodesByIndex = nodes.associateBy { it.index }
         val crossingEdges = edges.filter {
@@ -107,10 +120,11 @@ class LevelDependencyGraph(
                 node.column - node.width / 2, y - LevelMapWindow.NODE_HEIGHT / 2,
                 node.column + node.width / 2, y + LevelMapWindow.NODE_HEIGHT / 2)
         } + listOf(
-            NormalizedButtonRect(PalmAction.PREVIOUS_GROUP, .08, .85, .33, .94),
-            NormalizedButtonRect(PalmAction.BACK, .375, .85, .625, .94),
-            NormalizedButtonRect(PalmAction.NEXT_GROUP, .67, .85, .92, .94),
+            NormalizedButtonRect(PalmAction.PREVIOUS_GROUP, .08, LevelMapWindow.CONTROLS_TOP, .33, LevelMapWindow.CONTROLS_BOTTOM),
+            NormalizedButtonRect(PalmAction.BACK, .375, LevelMapWindow.CONTROLS_TOP, .625, LevelMapWindow.CONTROLS_BOTTOM),
+            NormalizedButtonRect(PalmAction.NEXT_GROUP, .67, LevelMapWindow.CONTROLS_TOP, .92, LevelMapWindow.CONTROLS_BOTTOM),
         )
-        return LevelMapWindow(start, visible, crossingEdges, PalmPanelSpec(600, 460, .34, buttons))
+        return LevelMapWindow(start, visible, crossingEdges,
+            PalmPanelSpec(LevelMapWindow.WIDTH_DP, LevelMapWindow.HEIGHT_DP, LevelMapWindow.WIDTH_METERS, buttons), rows.size)
     }
 }

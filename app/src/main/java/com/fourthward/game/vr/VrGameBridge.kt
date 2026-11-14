@@ -265,8 +265,9 @@ class VrGameBridge(context: Context) {
             completedCount = game.progress.completedCount,
             map = if (levelListVisible) VrLevelMapState(
                 levelGraph.nodes.map { VrMapNode(it.index, it.row, it.column, game.progress.isCompleted(it.index), game.progress.isUnlocked(it.index), it.width) },
-                levelGraph.edges.map { VrMapEdge(it.fromIndex, it.toIndex) },
+                mapWindow.edges.map { VrMapEdge(it.fromIndex, it.toIndex) },
                 mapFirstRow, levelGraph.totalRows, game.progress.completedCount, levels.size,
+                mapWindow.visibleRows,
             ) else null)
         val voiceLabel = when (narration.status) {
             LessonNarration.Status.PLAYING -> "语音讲解中"

@@ -90,8 +90,11 @@ data class VrMapSegment(
 data class VrLevelMapState(
     val nodes: List<VrMapNode>, val edges: List<VrMapEdge>, val firstRow: Int,
     val totalRows: Int, val totalCompleted: Int, val totalLevels: Int,
+    val visibleRows: Int = LevelMapWindow.VISIBLE_ROWS,
 ) {
     fun centerY(row: Int): Double = LevelMapWindow.centerY(row, firstRow)
+    val clipTop: Double get() = maxOf(TOP,
+        centerY(firstRow + visibleRows - 1) - LevelMapWindow.NODE_HEIGHT / 2 - 8.0 / LevelMapWindow.HEIGHT_DP)
 
     /** Orthogonal routes clipped at the viewport, before conversion to world-space quads. */
     fun segments(): List<VrMapSegment> {
@@ -106,8 +109,8 @@ data class VrLevelMapState(
                 else listOf(from.column to startY, from.column to middle, to.column to middle, to.column to endY)
             points.zipWithNext().mapNotNull { (a, b) ->
                 val (x1, y1) = a; val (x2, y2) = b
-                if (maxOf(y1, y2) < TOP || minOf(y1, y2) > BOTTOM) return@mapNotNull null
-                val clippedY1 = y1.coerceIn(TOP, BOTTOM); val clippedY2 = y2.coerceIn(TOP, BOTTOM)
+                if (maxOf(y1, y2) < clipTop || minOf(y1, y2) > BOTTOM) return@mapNotNull null
+                val clippedY1 = y1.coerceIn(clipTop, BOTTOM); val clippedY2 = y2.coerceIn(clipTop, BOTTOM)
                 if (abs(x1 - x2) < .00001 && abs(clippedY1 - clippedY2) < .00001) return@mapNotNull null
                 VrMapSegment(from.index, to.index, x1, clippedY1, x2, clippedY2,
                     from.completed && to.completed, from.completed && to.unlocked)
@@ -115,7 +118,7 @@ data class VrLevelMapState(
         }
     }
 
-    companion object { const val TOP = .155; const val BOTTOM = .80 }
+    companion object { const val TOP = LevelMapWindow.CONTENT_TOP; const val BOTTOM = LevelMapWindow.CONTENT_BOTTOM }
 }
 
 data class VrLessonStatus(
@@ -165,10 +168,10 @@ internal object VrUiAtlas {
     val angle = Region(0, 0, 300, 72)
     val comparisons = listOf(Region(320, 0, 340, 72), Region(670, 0, 340, 72))
     val tutorial = Region(0, 80, 640, 184)
-    val panel = Region(0, 280, 600, 460)
+    val panel = Region(0, 280, LevelMapWindow.WIDTH_DP, LevelMapWindow.HEIGHT_DP)
     val buttons = List(12) { Region(620 + (it % 4) * 350, 280 + (it / 4) * 150, 340, 140) }
     val pointer = Region(1500, 0, 64, 64)
-    val lesson = Region(0, 768, 900, 240)
+    val lesson = Region(620, 768, 900, 240)
     val yellow = Region(1050, 0, 8, 8)
     val white = Region(1064, 0, 8, 8)
     val mint = Region(1078, 0, 8, 8)
@@ -464,9 +467,9 @@ class VrUiRenderer {
                     }
                 }
                 // At clipped routes the chevron indicates which direction continues beyond the window.
-                segments.filter { it.y1 == VrLevelMapState.BOTTOM || it.y2 == VrLevelMapState.TOP }.forEach { segment ->
-                    val x = if (segment.y2 == VrLevelMapState.TOP) segment.x2 else segment.x1
-                    val y = if (segment.y2 == VrLevelMapState.TOP) VrLevelMapState.TOP + .008 else VrLevelMapState.BOTTOM - .008
+                segments.filter { it.y1 == VrLevelMapState.BOTTOM || it.y2 == map.clipTop }.forEach { segment ->
+                    val x = if (segment.y2 == map.clipTop) segment.x2 else segment.x1
+                    val y = if (segment.y2 == map.clipTop) map.clipTop + .008 else VrLevelMapState.BOTTOM - .008
                     val tint = if (segment.available) yellowRegion else whiteRegion
                     val a = opacity * movement.branchProgress * .55
                     line(panelPose, (x - .5 - .006) * width, (.5 - y - .006) * height,
@@ -624,14 +627,16 @@ class VrUiRenderer {
             }
             // A slim overview rail preserves orientation without shrinking every level to an unreadable dot.
             val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ink.alpha(Ink.ivory, 35); strokeWidth = 1f }
-            c.drawLine(width - 17f, 81f, width - 17f, 356f, rail)
-            val rows = map.totalRows.coerceAtLeast(3)
-            val step = 275f / rows
-            val bottom = 356f - map.firstRow * step
-            c.drawRect(width - 19f, bottom - 3 * step, width - 15f, bottom,
+            val railTop = (LevelMapWindow.CONTENT_TOP * height).toFloat() + 8f
+            val railBottom = (LevelMapWindow.CONTENT_BOTTOM * height).toFloat() - 8f
+            c.drawLine(width - 17f, railTop, width - 17f, railBottom, rail)
+            val rows = map.totalRows.coerceAtLeast(map.visibleRows)
+            val step = (railBottom - railTop) / rows
+            val bottom = railBottom - map.firstRow * step
+            c.drawRect(width - 19f, bottom - map.visibleRows * step, width - 15f, bottom,
                 Paint().apply { color = Ink.signal })
             map.nodes.map { it.row }.distinct().forEach { row ->
-                val y = 356f - (row + .5f) * step
+                val y = railBottom - (row + .5f) * step
                 c.drawLine(width - 24f, y, width - 21f, y, rail)
             }
             val selected = state.hoveredAction?.let(state::levelItem)
@@ -640,8 +645,8 @@ class VrUiRenderer {
                     it.completed -> "${it.code}  已通过 · 可再次进入"
                     else -> "${it.code}  ${if (it.hasIntroduction) "立体讲解 · 实际探索" else "进入挑战"}" }
             } ?: "选择关卡，继续探索"
-            Ink.text(c, detail, 22f, 378f, Ink.paint(12.5f, if (selected?.unlocked == false) Ink.dim else Ink.ivory), width - 44f)
-            Ink.line(c, 22f, 385f, width - 22f, Ink.alpha(Ink.ivory, 38))
+            Ink.text(c, detail, 22f, height - 79f, Ink.paint(12.5f, if (selected?.unlocked == false) Ink.dim else Ink.ivory), width - 44f)
+            Ink.line(c, 22f, height - 72f, width - 22f, Ink.alpha(Ink.ivory, 38))
             Ink.text(c, if (state.debugMode) "1–${state.levelItems.size} 选择 · Tab / Enter 确认 · ↑↓ 浏览 · Esc 返回" else pointerHint,
                 22f, height - 8f, Ink.paint(11f, Ink.dim), width - 44f)
         } else if (state.chapterItems.isNotEmpty()) {

@@ -19,7 +19,9 @@ class LevelDependencyGraphTest {
         assertEquals((0..5).toList(), movement.map { byIndex.getValue(it).row })
         movement.forEach { assertEquals(.48, byIndex.getValue(it).width, 0.0) }
         assertEquals(12, graph.totalRows)
-        assertEquals(9, graph.maxFirstRow)
+        assertEquals(6, graph.maxFirstRow)
+        assertEquals(movement, graph.window(0).nodes.map { it.index })
+        assertEquals(9, graph.window(graph.maxFirstRow).nodes.size)
     }
 
     @Test fun independentChaptersBranchAtTheSameDepthAndRemainInTheirOwnLanes() {
@@ -88,9 +90,9 @@ class LevelDependencyGraphTest {
     @Test fun visiblePrerequisitesSitBelowTheirSuccessorsAndCrossingLinesAreRetained() {
         val window = graph.window(5)
         val byIndex = window.nodes.associateBy { it.index }
-        assertEquals(listOf(8, 3, 9, 4, 10), window.nodes.map { it.index })
+        assertEquals(listOf(8, 3, 9, 4, 10, 5, 11, 12, 13), window.nodes.map { it.index })
         assertTrue(LevelMapEdge(7, 8) in window.edges) // Continue below this viewport.
-        assertTrue(LevelMapEdge(4, 5) in window.edges) // Continue above this viewport.
+        assertTrue(LevelMapEdge(13, 14) in window.edges) // Continue above this viewport.
         assertFalse(LevelMapEdge(0, 1) in window.edges)
         window.edges.filter { it.fromIndex in byIndex && it.toIndex in byIndex }.forEach {
             assertTrue(LevelMapWindow.centerY(byIndex.getValue(it.fromIndex).row, window.firstRow) >
@@ -103,9 +105,10 @@ class LevelDependencyGraphTest {
         assertEquals(graph.maxFirstRow, graph.window(Int.MAX_VALUE).firstRow)
         levels.indices.forEach { index -> assertTrue(graph.windowForLevel(index).nodes.any { it.index == index }) }
         val window = graph.window(0)
-        assertEquals(PalmAction.PREVIOUS_GROUP, window.layout.hitTest(.205, .895))
-        assertEquals(PalmAction.BACK, window.layout.hitTest(.5, .895))
-        assertEquals(PalmAction.NEXT_GROUP, window.layout.hitTest(.795, .895))
+        val controlsY = (LevelMapWindow.CONTROLS_TOP + LevelMapWindow.CONTROLS_BOTTOM) / 2
+        assertEquals(PalmAction.PREVIOUS_GROUP, window.layout.hitTest(.205, controlsY))
+        assertEquals(PalmAction.BACK, window.layout.hitTest(.5, controlsY))
+        assertEquals(PalmAction.NEXT_GROUP, window.layout.hitTest(.795, controlsY))
     }
 
     @Test fun parallelMovementChallengesUseOneRowWithoutIntroducingFalseDependencies() {
@@ -118,6 +121,16 @@ class LevelDependencyGraphTest {
         assertTrue(challengeNodes.all { it.width == .27 })
         assertEquals(listOf(6, 7, 8), parallel.window(3).nodes.take(3).map { it.index })
         assertFalse(parallel.edges.any { it.fromIndex in 6..8 && it.toIndex in 6..8 })
+        val windows = (0..parallel.maxFirstRow).map(parallel::window)
+        assertTrue(windows.all { it.nodes.size <= 9 })
+        assertEquals(levels.indices.toSet(), windows.flatMap { it.nodes }.map { it.index }.toSet())
+        assertTrue(windows.last().nodes.any { it.row == parallel.totalRows - 1 })
+        windows.forEach { window ->
+            assertTrue(window.visibleRows in 1..LevelMapWindow.VISIBLE_ROWS)
+            window.nodes.groupBy { it.row }.forEach { (row, included) ->
+                assertEquals(parallel.nodes.filter { it.row == row }, included)
+            }
+        }
         listOf(3, 9).forEach { target ->
             assertEquals(setOf(6, 7, 8), parallel.edges.filter { it.toIndex == target }.map { it.fromIndex }.toSet())
         }
@@ -126,12 +139,13 @@ class LevelDependencyGraphTest {
     @Test fun changingViewportRequiresAFreshFrontToPanelPoke() {
         val detector = PalmPoke()
         val first = graph.window(0)
-        detector.update(.5, .70, .05, true, .016, first.layout)
-        assertEquals(PalmAction.LEVEL_1, detector.update(.5, .70, .004, true, .016, first.layout).action)
+        val y = LevelMapWindow.BOTTOM_CENTER_Y
+        detector.update(.5, y, .05, true, .016, first.layout)
+        assertEquals(PalmAction.LEVEL_1, detector.update(.5, y, .004, true, .016, first.layout).action)
         val second = graph.window(1)
-        assertNull(detector.update(.5, .70, .004, true, .016, second.layout).action)
-        detector.update(.5, .70, .05, true, .016, second.layout)
-        assertEquals(PalmAction.LEVEL_1, detector.update(.5, .70, .004, true, .016, second.layout).action)
+        assertNull(detector.update(.5, y, .004, true, .016, second.layout).action)
+        detector.update(.5, y, .05, true, .016, second.layout)
+        assertEquals(PalmAction.LEVEL_1, detector.update(.5, y, .004, true, .016, second.layout).action)
         assertEquals(1, second.levelForAction(PalmAction.LEVEL_1))
     }
 
@@ -139,8 +153,9 @@ class LevelDependencyGraphTest {
         val detector = PalmPoke()
         val window = graph.window(0)
         val disabled = setOf(PalmAction.LEVEL_2, PalmAction.LEVEL_3)
-        detector.update(.5, .47, .05, true, .016, window.layout, disabled)
-        val contact = detector.update(.5, .47, .004, true, .016, window.layout, disabled)
+        val y = LevelMapWindow.centerY(1, 0)
+        detector.update(.5, y, .05, true, .016, window.layout, disabled)
+        val contact = detector.update(.5, y, .004, true, .016, window.layout, disabled)
         assertNull(contact.action)
         assertNull(contact.hoveredAction)
     }

@@ -34,10 +34,10 @@ class VrLevelMapStateTest {
     }
 
     @Test fun incomingAndOutgoingRoutesClipWithoutLeakingIntoHeaderOrControls() {
-        val nodes = (0..5).map { VrMapNode(it, it, .5, false, false) }
-        val edges = (0..4).map { VrMapEdge(it, it + 1) }
+        val nodes = (0..8).map { VrMapNode(it, it, .5, false, false) }
+        val edges = (0..7).map { VrMapEdge(it, it + 1) }
         val segments = state(nodes, edges, firstRow = 1).segments()
-        assertEquals(setOf(0, 1, 2, 3), segments.map { it.fromIndex }.toSet())
+        assertEquals((0..6).toSet(), segments.map { it.fromIndex }.toSet())
         assertEquals(VrLevelMapState.BOTTOM, segments.first().y1, 1e-12)
         assertEquals(VrLevelMapState.TOP, segments.last().y2, 1e-12)
         assertTrue(segments.all { it.y1 in VrLevelMapState.TOP..VrLevelMapState.BOTTOM &&
@@ -49,6 +49,15 @@ class VrLevelMapStateTest {
         val map = state(listOf(VrMapNode(8, 0, .5, true, true), VrMapNode(9, 1, .72, false, false)),
             listOf(VrMapEdge(8, 9)))
         assertTrue(map.segments().all { !it.available && !it.completed })
+    }
+
+    @Test fun capacityLimitedWindowDoesNotDrawConnectionsForItsHiddenUpperRows() {
+        val map = VrLevelMapState((0..7).map { VrMapNode(it, it, .5, true, true) },
+            (0..6).map { VrMapEdge(it, it + 1) }, 0, 8, 8, 8, visibleRows = 4)
+        assertTrue(map.clipTop > VrLevelMapState.TOP)
+        assertEquals((0..3).toSet(), map.segments().map { it.fromIndex }.toSet())
+        assertEquals(map.clipTop, map.segments().last().y2, 1e-12)
+        assertTrue(map.segments().all { it.y1 >= map.clipTop && it.y2 >= map.clipTop })
     }
 
     @Test fun everyRealWindowKeepsVisibleNodesAndRoutesAligned() {
