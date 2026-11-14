@@ -54,7 +54,7 @@ object LessonSceneBuilder {
         val normal = snapshot.planeNormal
 
         // A quiet horizontal plinth supplies depth references while the observer walks around.
-        mesh.box(Vec3(.075, -.665, .225), Vec3(.99, .025, .565), BASE)
+        mesh.plinth(Vec3(.075, -.665, .225), Vec3(.99, .025, .565), BASE, BORDER, PLINTH_METAL)
         for (i in 0..8) {
             val x = -.85 + i * .23
             mesh.line(Vec3(x, -.638, -.29), Vec3(x, -.638, .74), .0022, GRID)
@@ -65,6 +65,7 @@ object LessonSceneBuilder {
         }
         mesh.line(Vec3(-.915, -.633, -.34), Vec3(1.065, -.633, -.34), .0045, BORDER)
         mesh.line(Vec3(-.915, -.633, .79), Vec3(1.065, -.633, .79), .0045, BORDER)
+        mesh.plinthMarkers(Vec3(.075, -.636, .225), Vec3(.99, 0.0, .565), .003, PLINTH_METAL, SIGNAL)
 
         // The viewport clips an infinite affine plane to a fixed demonstration volume.
         // It does not slide with the character when the character moves within that plane.
@@ -246,7 +247,7 @@ object LessonSceneBuilder {
         val table = LessonMesh { point -> atAnchor(anchor, point + offset) }
         // Both plinths sit below the fixed observer's feet, including the low stacked-box
         // observer. Display/model coordinates and label anchors remain unchanged.
-        table.box(Vec3(0.0, -.27, 0.0), Vec3(.24, .012, .18), BASE)
+        table.plinth(Vec3(0.0, -.27, 0.0), Vec3(.24, .012, .18), BASE, BORDER, PLINTH_METAL)
         for (i in -3..3) {
             val position = i * .06
             table.line(Vec3(position, -.257, -.15), Vec3(position, -.257, .15), .001, GRID)
@@ -257,6 +258,7 @@ object LessonSceneBuilder {
         }
         table.loop(listOf(Vec3(-.24, -.256, -.18), Vec3(.24, -.256, -.18),
             Vec3(.24, -.256, .18), Vec3(-.24, -.256, .18)), .002, BORDER)
+        table.plinthMarkers(Vec3(0.0, -.255, 0.0), Vec3(.24, 0.0, .18), .0015, PLINTH_METAL, SIGNAL)
         return table.result()
     }
 
@@ -367,6 +369,7 @@ object LessonSceneBuilder {
     private val BASE = LessonColor(0x181E21)
     private val GRID = LessonColor(0x303A3E)
     private val BORDER = LessonColor(0x607073)
+    private val PLINTH_METAL = LessonColor(0xAFB9B6)
     private val PLANE_FRAME = LessonColor(0x6D9BA4)
     private val PLANE_GRID = LessonColor(0x304F58)
     private val WALL = LessonColor(0xABB2AD)
@@ -431,11 +434,12 @@ private class LessonColor(private val hex: Int, val factor: Double = 1.0) {
 private class LessonMesh(private val transform: (Vec3) -> Vec3) {
     private var values = FloatArray(8192)
     private var size = 0
-    private fun vertex(point: Vec3, color: LessonColor) {
+    private fun vertex(point: Vec3, color: LessonColor) = vertex(point, color.r, color.g, color.b)
+    private fun vertex(point: Vec3, r: Float, g: Float, b: Float) {
         if (size + 7 > values.size) values = values.copyOf(values.size * 2)
         val p = transform(point)
         values[size++] = p.x.toFloat(); values[size++] = p.y.toFloat(); values[size++] = p.z.toFloat()
-        values[size++] = color.r; values[size++] = color.g; values[size++] = color.b; values[size++] = 1f
+        values[size++] = r; values[size++] = g; values[size++] = b; values[size++] = 1f
     }
     fun result() = values.copyOf(size)
     fun section(section: BoxSection, color: LessonColor) {
@@ -448,26 +452,84 @@ private class LessonMesh(private val transform: (Vec3) -> Vec3) {
         }
     }
     fun sphere(center: Vec3, radius: Double, color: LessonColor) {
-        val latitudes = 16
-        val longitudes = 28
-        fun unit(latitude: Double, longitude: Double) = Vec3(cos(latitude) * cos(longitude),
-            sin(latitude), cos(latitude) * sin(longitude))
-        for (latitude in 0 until latitudes) for (longitude in 0 until longitudes) {
-            val low = -PI / 2 + latitude * PI / latitudes
-            val high = low + PI / latitudes
-            val left = longitude * 2 * PI / longitudes
-            val right = left + 2 * PI / longitudes
-            val a = center + unit(low, left) * radius
-            val b = center + unit(low, right) * radius
-            val c = center + unit(high, right) * radius
-            val d = center + unit(high, left) * radius
-            val normal = unit((low + high) * .5, (left + right) * .5)
-            val tint = color.shade(.48 + .52 * max(0.0, normal.dot(Vec3(-.35, .82, .45))))
-            when (latitude) {
-                0 -> face(listOf(a, c, d), tint)
-                latitudes - 1 -> face(listOf(a, b, c), tint)
-                else -> face(listOf(a, b, c, d), tint)
+        val latitudes = SceneMaterials.SPHERE_RINGS
+        val longitudes = SceneMaterials.SPHERE_SECTORS
+        val base = SceneMaterials.toLinear(floatArrayOf(color.r, color.g, color.b, 1f))
+        // Shared vertex normals keep adjacent triangles continuous, including the seam
+        // and poles. Every position remains on the exact analytic section sphere.
+        val normals = Array((latitudes + 1) * longitudes) { index ->
+            val row = index / longitudes
+            val latitude = -PI / 2 + row * PI / latitudes
+            val longitude = (index % longitudes) * 2 * PI / longitudes
+            when (row) {
+                0 -> Vec3(0.0, -1.0, 0.0)
+                latitudes -> Vec3(0.0, 1.0, 0.0)
+                else -> Vec3(cos(latitude) * cos(longitude), sin(latitude), cos(latitude) * sin(longitude))
             }
+        }
+        val positions = normals.map { center + it * radius }
+        val colors = normals.map { SceneMaterials.toSrgb(SceneMaterials.sphereLinear(base, it)) }
+        fun emit(index: Int) {
+            val tint = colors[index]
+            vertex(positions[index], tint[0], tint[1], tint[2])
+        }
+        fun triangle(a: Int, b: Int, c: Int) { emit(a); emit(b); emit(c) }
+        for (latitude in 0 until latitudes) for (longitude in 0 until longitudes) {
+            val next = (longitude + 1) % longitudes
+            val a = latitude * longitudes + longitude
+            val b = latitude * longitudes + next
+            val c = (latitude + 1) * longitudes + next
+            val d = (latitude + 1) * longitudes + longitude
+            when (latitude) {
+                0 -> triangle(a, d, c)
+                latitudes - 1 -> triangle(a, c, b)
+                else -> { triangle(a, c, b); triangle(a, d, c) }
+            }
+        }
+    }
+
+    /** Layered, clipped-corner instrument base contained in the original box envelope. */
+    fun plinth(center: Vec3, half: Vec3, surface: LessonColor, edge: LessonColor, metal: LessonColor) {
+        fun rim(inset: Double, height: Double): List<Vec3> {
+            val x = half.x - inset
+            val z = half.z - inset
+            val clip = min(x, z) * .08
+            return listOf(Vec3(-x + clip, height, -z), Vec3(x - clip, height, -z),
+                Vec3(x, height, -z + clip), Vec3(x, height, z - clip),
+                Vec3(x - clip, height, z), Vec3(-x + clip, height, z),
+                Vec3(-x, height, z - clip), Vec3(-x, height, -z + clip)).reversed().map { center + it }
+        }
+        val bevel = min(half.x, half.z) * .025
+        val bottom = rim(bevel, -half.y)
+        val shoulder = rim(0.0, -half.y * .55)
+        val lip = rim(0.0, half.y * .55)
+        val top = rim(bevel, half.y)
+        fun band(lower: List<Vec3>, upper: List<Vec3>, color: LessonColor) {
+            for (i in lower.indices) {
+                val next = (i + 1) % lower.size
+                face(listOf(lower[i], lower[next], upper[next], upper[i]), color.shade(if (i < 3) .75 else .52))
+            }
+        }
+        face(bottom.reversed(), surface)
+        band(bottom, shoulder, surface)
+        band(shoulder, lip, edge)
+        band(lip, top, metal)
+        face(top, surface)
+    }
+
+    /** Sparse alignment brackets and a short caution strip read as hardware, not a UI. */
+    fun plinthMarkers(center: Vec3, half: Vec3, width: Double, metal: LessonColor, accent: LessonColor) {
+        val inset = min(half.x, half.z) * .10
+        val run = min(half.x, half.z) * .15
+        for (sx in listOf(-1.0, 1.0)) for (sz in listOf(-1.0, 1.0)) {
+            val corner = center + Vec3(sx * (half.x - inset), 0.0, sz * (half.z - inset))
+            line(corner, corner - Vec3(sx * run, 0.0, 0.0), width, metal)
+            line(corner, corner - Vec3(0.0, 0.0, sz * run), width, metal)
+        }
+        val front = center + Vec3(-half.x * .36, 0.0, half.z - inset)
+        for (i in 0..2) {
+            val start = front + Vec3(run * .75 * i, 0.0, 0.0)
+            line(start, start + Vec3(run * .32, 0.0, -run * .42), width, accent)
         }
     }
     fun face(points: List<Vec3>, color: LessonColor) {
@@ -532,12 +594,6 @@ private class LessonMesh(private val transform: (Vec3) -> Vec3) {
         ring(center, y, z, radius, .008, color)
         for (latitude in listOf(-PI / 4, PI / 4))
             ring(center + y * (sin(latitude) * radius), x, z, cos(latitude) * radius, .006, color)
-    }
-    fun box(center: Vec3, half: Vec3, color: LessonColor) {
-        val corners = corners(center, half)
-        val faces = listOf(listOf(0, 4, 6, 2), listOf(1, 3, 7, 5), listOf(0, 1, 5, 4),
-            listOf(2, 6, 7, 3), listOf(0, 2, 3, 1), listOf(4, 5, 7, 6))
-        faces.forEachIndexed { index, indices -> face(indices.map { corners[it] }, color.shade(if (index == 3) 1.0 else .64)) }
     }
     fun disc(center: Vec3, right: Vec3, up: Vec3, radius: Double, color: LessonColor) {
         if (radius <= 1e-8) return

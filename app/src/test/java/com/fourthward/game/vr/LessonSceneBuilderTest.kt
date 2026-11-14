@@ -107,6 +107,40 @@ class LessonSceneBuilderTest {
         assertTrue(pairedWithoutRightSection.size < LessonSceneBuilder.build(initial, anchor).size)
     }
 
+    @Test fun miniatureSphereFacesOutwardAndShadingIsContinuousAcrossTriangleBoundaries() {
+        val snapshot = LessonPlayer(3).scene.copy(angleRadians = PI / 4)
+        val mesh = LessonSceneBuilder.geometryExhibitVertices(snapshot, identityAnchor())
+        val vertexColors = mutableMapOf<List<Float>, FloatArray>()
+        var sharedVertices = 0
+        for (index in mesh.indices step 7) {
+            val position = listOf(mesh[index], mesh[index + 1], mesh[index + 2])
+            val color = mesh.copyOfRange(index + 3, index + 6)
+            val previous = vertexColors.putIfAbsent(position, color)
+            if (previous != null) {
+                sharedVertices++
+                assertArrayEquals("Adjacent triangles must share their surface color", previous, color, 1e-6f)
+            }
+        }
+        assertTrue(sharedVertices > 0)
+        assertTrue("Lighting must vary over a curved surface, not flatten the whole sphere",
+            vertexColors.values.map { it.toList() }.distinct().size > 20)
+        assertTrue("At least one triangle must interpolate lighting between its vertices",
+            mesh.indices.step(21).any { index ->
+                (3..5).any { channel -> abs(mesh[index + channel] - mesh[index + 7 + channel]) > 1e-4f }
+            })
+        val source = GeometryExhibits.world(GeometryTopic.HYPERSPHERE).spheres.single()
+        val section = SliceGeometry.sliceSphere(source, SliceFrame(snapshot.angleRadians))!!
+        val displayCenter = LessonSceneBuilder.geometryDisplayCenter(GeometryTopic.HYPERSPHERE)
+        val positions = points(mesh).map {
+            undoDisplayYaw(it) * (1.0 / LessonSceneBuilder.GEOMETRY_SCALE) + displayCenter
+        }
+        for ((a, b, c) in positions.chunked(3)) {
+            val outward = (a + b + c) * (1.0 / 3.0) - section.center
+            assertTrue("Every sphere triangle must face away from its analytic center",
+                (b - a).cross(c - a).dot(outward) > 0.0)
+        }
+    }
+
     @Test fun miniatureTesseractShowsACubeThenAWiderCuboidThenACubeUsingFixedScale() {
         val initial = LessonPlayer(4).scene
         val source = GeometryExhibits.world(GeometryTopic.TESSERACT).boxes.single()
