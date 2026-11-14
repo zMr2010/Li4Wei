@@ -30,6 +30,9 @@ class VrGameBridge(context: Context) {
     private var levelListVisible = false
     private var chapterMapVisible = true
     private var navigationRevision = 0L
+    private var feedbackRevision = 0L
+    private var effectsSceneRevision = 0L
+    private val worldEffects = VrWorldEffects()
     private var selectedControl = 2
     private var clickFeedback = 0.0
     private var blockedFeedback = 0.0
@@ -139,8 +142,6 @@ class VrGameBridge(context: Context) {
         val now = System.nanoTime()
         if (focusReset.getAndSet(false)) {
             resetHands()
-            ui.close()
-            ui = VrUiRenderer()
             worldDirty = true
         }
         clickFeedback = (clickFeedback - clockStep).coerceAtLeast(0.0)
@@ -150,6 +151,7 @@ class VrGameBridge(context: Context) {
         val beforeCompleted = game.completed
         val beforeMissionRevision = game.missionRevision
         val beforeCheckpoints = game.completedCheckpointIds
+        val beforeObservation = game.observationStep
         val previousRawHead = lastHead.position
         val startedInLesson = lesson != null
         val startedInLevelList = levelListVisible
@@ -215,6 +217,8 @@ class VrGameBridge(context: Context) {
             beforeMissionRevision != game.missionRevision
         if (beforeCheckpoints != game.completedCheckpointIds) logState("checkpoint")
         if (!beforeCompleted && game.completed) logState("completed")
+        if (beforeCheckpoints != game.completedCheckpointIds || beforeCompleted != game.completed ||
+            beforeObservation != game.observationStep) feedbackRevision++
         lesson?.let { player ->
             if (player.tick(clockStep, focused && tracked != null && !levelListVisible)) worldDirty = true
             val key = player.levelIndex to player.revision
@@ -276,13 +280,17 @@ class VrGameBridge(context: Context) {
             geometryTopic = it.definition.geometryTopic, anchorPose = lessonAnchor, motionTopic = it.definition.motionTopic) }
         val uiFrame = ui.render(VrUiState(activeLesson?.let { Math.toDegrees(it.scene.angleRadians) } ?: game.rotationDegrees, tutorialStatus(), panel,
             panelPose = if (focused) panelPose?.renderPose() else null, headPose = lastHead.renderPose(),
-            lesson = lessonStatus, panelScale = lessonPanelScale), now)
+            lesson = lessonStatus, panelScale = lessonPanelScale,
+            active = focused && tracked != null, pageRevision = navigationRevision,
+            feedbackRevision = feedbackRevision), now)
         val vertices = if (worldDirty && (activeLesson == null || lessonAnchor != null)) (if (activeLesson == null)
             VrSceneBuilder.build(game, referenceVisible) else LessonSceneBuilder.build(activeLesson.scene, lessonAnchor!!)).also {
             worldDirty = false
             meshedHeadPosition = game.trackedHead
         } else null
-        return VrRenderFrame(vertices, uiFrame.uiBitmap, uiFrame.uiQuads)
+        val effects = worldEffects.frame(game, clockStep, focused && tracked != null,
+            visible = activeLesson == null && !levelListVisible, sceneRevision = effectsSceneRevision)
+        return VrRenderFrame(vertices, uiFrame.uiBitmap, uiFrame.uiQuads, effects)
     }
 
     private fun controllerState(values: FloatArray): InputControllerState? {
@@ -525,7 +533,7 @@ class VrGameBridge(context: Context) {
             }
         }
         val panel = panelPose
-        if (panel == null || left == null) resetPoke()
+        if (panel == null || left == null || !ui.interactionReady(navigationRevision)) resetPoke()
         else {
             val layout = activePanelLayout()
             val hit = VrTrackingMath.pointer(left.index.tip, panel,
@@ -551,6 +559,7 @@ class VrGameBridge(context: Context) {
 
     private fun beginLesson() {
         navigationRevision++
+        effectsSceneRevision++
         levelListVisible = false
         lesson = if (LessonTutorials.hasLesson(game.levelIndex)) LessonPlayer(game.levelIndex) else null
         lessonAnchor = null
@@ -589,6 +598,7 @@ class VrGameBridge(context: Context) {
     private fun retryLevel() {
         val restored = game.retryAtCheckpoint(lastHead.position)
         navigationRevision++
+        effectsSceneRevision++
         input.clearForPageChange()
         resetHands()
         worldDirty = true
@@ -613,6 +623,7 @@ class VrGameBridge(context: Context) {
                 if (player.isLastStep) {
                     lesson = null
                     navigationRevision++
+                    effectsSceneRevision++
                     narration.stop()
                     narration.setActive(false)
                     // Observation can involve unrestricted room-scale walking. Start the actual
@@ -641,7 +652,7 @@ class VrGameBridge(context: Context) {
 
     @Keep
     @Synchronized
-    fun close() { narration.close(); resetHands(); input.setEnabled(false) }
+    fun close() { narration.close(); ui.close(); worldEffects.reset(); resetHands(); input.setEnabled(false) }
 
     private fun tutorialStatus(): VrTutorialStatus {
         val geometryLesson = game.level.geometryTopic != null

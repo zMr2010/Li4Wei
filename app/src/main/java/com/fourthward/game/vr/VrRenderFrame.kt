@@ -10,6 +10,8 @@ class VrRenderFrame(
     @JvmField val worldVertices: FloatArray? = null,
     /** Canvas ARGB8888 atlas; native blending must account for Android premultiplied alpha. */
     @JvmField val uiBitmap: Bitmap? = null,
-    /** Records of21floats: column-major model16, UV left/top/right/bottom4, depthTest1. */
+    /** Records of22floats: column-major model16, UV4, depthTest1, premultiplied opacity1. */
     @JvmField val uiQuads: FloatArray = floatArrayOf(),
+    /** Independent straight-alpha xyzrgba triangles; empty clears, null retains the GPU buffer. */
+    @JvmField val effectsVertices: FloatArray? = null,
 )

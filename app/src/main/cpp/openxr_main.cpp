@@ -111,9 +111,10 @@ precision highp float;
 in vec2 vUv;
 uniform sampler2D uTexture;
 uniform bool uLinearize;
+uniform float uOpacity;
 out vec4 outColor;
 vec3 linear(vec3 c){return mix(c/12.92,pow((c+0.055)/1.055,vec3(2.4)),step(vec3(0.04045),c));}
-void main(){vec4 c=texture(uTexture,vUv);if(uLinearize && c.a>0.0001)c.rgb=linear(c.rgb/c.a)*c.a;outColor=c;}
+void main(){vec4 c=texture(uTexture,vUv);if(uLinearize && c.a>0.0001)c.rgb=linear(c.rgb/c.a)*c.a;outColor=c*clamp(uOpacity,0.0,1.0);}
 )";
 struct Swapchain {
     XrSwapchain handle = XR_NULL_HANDLE;
@@ -140,14 +141,17 @@ public:
     std::vector<Swapchain> swapchains;
     GLuint framebuffer = 0, worldProgram = 0, uiProgram = 0, worldVao = 0, worldVbo = 0;
     GLuint uiVao = 0, uiVbo = 0, uiTexture = 0;
+    GLuint effectsVao = 0, effectsVbo = 0;
     GLsizei worldCount = 0;
+    GLsizei effectsCount = 0;
     bool textureReady = false;
     std::vector<float> quads;
     jobject bridge = nullptr;
     jmethodID frameMethod = nullptr, focusMethod = nullptr;
-    jfieldID verticesField = nullptr, bitmapField = nullptr, quadsField = nullptr;
+    jfieldID verticesField = nullptr, bitmapField = nullptr, quadsField = nullptr, effectsField = nullptr;
     XrTime previousTime = 0;
     uint64_t frames = 0;
+    uint64_t textureUploads = 0;
     XrVector3f lastLoggedHead{999,999,999};
     XrGameInput input;
     jmethodID recycleBitmap = nullptr;
@@ -286,6 +290,9 @@ public:
         glGenVertexArrays(1,&worldVao);glGenBuffers(1,&worldVbo);glBindVertexArray(worldVao);glBindBuffer(GL_ARRAY_BUFFER,worldVbo);
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,7*sizeof(float),nullptr);
         glEnableVertexAttribArray(1);glVertexAttribPointer(1,4,GL_FLOAT,GL_FALSE,7*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));
+        glGenVertexArrays(1,&effectsVao);glGenBuffers(1,&effectsVbo);glBindVertexArray(effectsVao);glBindBuffer(GL_ARRAY_BUFFER,effectsVbo);
+        glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,7*sizeof(float),nullptr);
+        glEnableVertexAttribArray(1);glVertexAttribPointer(1,4,GL_FLOAT,GL_FALSE,7*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));
         glGenVertexArrays(1,&uiVao);glGenBuffers(1,&uiVbo);glBindVertexArray(uiVao);glBindBuffer(GL_ARRAY_BUFFER,uiVbo);
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,5*sizeof(float),nullptr);
         glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,5*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));
@@ -346,7 +353,7 @@ public:
             if(!frame)throw std::runtime_error("VrGameBridge.frame returned null");
             if(!verticesField){
                 jclass klass=env->GetObjectClass(frame);
-                verticesField=env->GetFieldID(klass,"worldVertices","[F");bitmapField=env->GetFieldID(klass,"uiBitmap","Landroid/graphics/Bitmap;");quadsField=env->GetFieldID(klass,"uiQuads","[F");javaCheck("frame fields");
+                verticesField=env->GetFieldID(klass,"worldVertices","[F");bitmapField=env->GetFieldID(klass,"uiBitmap","Landroid/graphics/Bitmap;");quadsField=env->GetFieldID(klass,"uiQuads","[F");effectsField=env->GetFieldID(klass,"effectsVertices","[F");javaCheck("frame fields");
             }
             auto vertices=static_cast<jfloatArray>(env->GetObjectField(frame,verticesField));
             if(vertices){
@@ -355,6 +362,17 @@ public:
                 jfloat* data=env->GetFloatArrayElements(vertices,nullptr);
                 glBindBuffer(GL_ARRAY_BUFFER,worldVbo);glBufferData(GL_ARRAY_BUFFER,n*sizeof(float),data,GL_DYNAMIC_DRAW);
                 env->ReleaseFloatArrayElements(vertices,data,JNI_ABORT);worldCount=n/7;
+            }
+            auto effects=static_cast<jfloatArray>(env->GetObjectField(frame,effectsField));
+            if(effects){
+                const jsize n=env->GetArrayLength(effects);
+                if(n%21!=0)throw std::runtime_error("effectsVertices must be xyzrgba triangles");
+                effectsCount=n/7;
+                if(n){
+                    jfloat* data=env->GetFloatArrayElements(effects,nullptr);
+                    glBindBuffer(GL_ARRAY_BUFFER,effectsVbo);glBufferData(GL_ARRAY_BUFFER,n*sizeof(float),data,GL_STREAM_DRAW);
+                    env->ReleaseFloatArrayElements(effects,data,JNI_ABORT);
+                }
             }
             jobject bitmap=env->GetObjectField(frame,bitmapField);
             if(bitmap){
@@ -365,13 +383,14 @@ public:
                 if(AndroidBitmap_lockPixels(env,bitmap,&pixels)!=ANDROID_BITMAP_RESULT_SUCCESS)throw std::runtime_error("UI bitmap lock failed");
                 glBindTexture(GL_TEXTURE_2D,uiTexture);glPixelStorei(GL_UNPACK_ALIGNMENT,4);glPixelStorei(GL_UNPACK_ROW_LENGTH,info.stride/4);
                 glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,info.width,info.height,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+                ++textureUploads;
                 glPixelStorei(GL_UNPACK_ROW_LENGTH,0);AndroidBitmap_unlockPixels(env,bitmap);textureReady=true;
                 if(!recycleBitmap){jclass bitmapClass=env->GetObjectClass(bitmap);recycleBitmap=env->GetMethodID(bitmapClass,"recycle","()V");env->DeleteLocalRef(bitmapClass);}
                 env->CallVoidMethod(bitmap,recycleBitmap);javaCheck("bitmap recycle");
             }
             auto javaQuads=static_cast<jfloatArray>(env->GetObjectField(frame,quadsField));
             const jsize n=javaQuads?env->GetArrayLength(javaQuads):0;
-            if(n%21!=0)throw std::runtime_error("uiQuads stride must be 21");
+            if(n%22!=0)throw std::runtime_error("uiQuads stride must be 22");
             quads.resize(n);if(n)env->GetFloatArrayRegion(javaQuads,0,n,quads.data());
             javaCheck("frame arrays");env->PopLocalFrame(nullptr);
         }catch(...){env->PopLocalFrame(nullptr);throw;}
@@ -391,14 +410,20 @@ public:
         glUseProgram(worldProgram);glUniformMatrix4fv(glGetUniformLocation(worldProgram,"uMvp"),1,GL_FALSE,viewProjection.data());
         glUniform1i(glGetUniformLocation(worldProgram,"uLinearize"),GL_TRUE);
         glBindVertexArray(worldVao);glDrawArrays(GL_TRIANGLES,0,worldCount);
+        // Small translucent HUD markers have their own streaming buffer. They are occluded
+        // by real sections but never write depth or require rebuilding the collision world.
+        if(effectsCount){
+            glDepthMask(GL_FALSE);glBindVertexArray(effectsVao);glDrawArrays(GL_TRIANGLES,0,effectsCount);
+        }
         if(textureReady&&!quads.empty()){
             glUseProgram(uiProgram);glUniform1i(glGetUniformLocation(uiProgram,"uLinearize"),GL_TRUE);glUniform1i(glGetUniformLocation(uiProgram,"uTexture"),0);
             glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,uiTexture);glBindVertexArray(uiVao);glBindBuffer(GL_ARRAY_BUFFER,uiVbo);
             glBlendFunc(GL_ONE,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);
-            for(size_t i=0;i<quads.size();i+=21){
+            for(size_t i=0;i<quads.size();i+=22){
                 const float* record=quads.data()+i;Matrix model{};std::copy(record,record+16,model.begin());
                 if(record[20]>.5f)glEnable(GL_DEPTH_TEST);else glDisable(GL_DEPTH_TEST);
                 const Matrix mvp=multiply(viewProjection,model);glUniformMatrix4fv(glGetUniformLocation(uiProgram,"uMvp"),1,GL_FALSE,mvp.data());
+                glUniform1f(glGetUniformLocation(uiProgram,"uOpacity"),record[21]);
                 const float l=record[16],t=record[17],r=record[18],b=record[19];
                 const float data[]={-.5f,.5f,0,l,t, -.5f,-.5f,0,l,b, .5f,-.5f,0,r,b,
                                      -.5f,.5f,0,l,t, .5f,-.5f,0,r,b, .5f,.5f,0,r,t};
@@ -435,7 +460,7 @@ public:
         const XrCompositionLayerBaseHeader* layers[]={reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer)};
         XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};end.displayTime=timing.predictedDisplayTime;end.environmentBlendMode=XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         end.layerCount=rendered?1:0;end.layers=rendered?layers:nullptr;XR_CHECK(xrEndFrame(session,&end));
-        ++frames;if(frames==1||frames%300==0)INFO("Frame submitted=%llu rendered=%d state=%d worldVertices=%d quads=%zu GLerror=0x%x",static_cast<unsigned long long>(frames),rendered,state,worldCount,quads.size()/21,glGetError());
+        ++frames;if(frames==1||frames%300==0)INFO("Frame submitted=%llu rendered=%d state=%d worldVertices=%d effectsVertices=%d quads=%zu atlasUploads=%llu GLerror=0x%x",static_cast<unsigned long long>(frames),rendered,state,worldCount,effectsCount,quads.size()/22,static_cast<unsigned long long>(textureUploads),glGetError());
     }
     void close(){
         if(session&&running){xrRequestExitSession(session);running=false;}
@@ -444,7 +469,9 @@ public:
             for(auto& target:swapchains)if(target.depth)glDeleteRenderbuffers(1,&target.depth);
             if(framebuffer)glDeleteFramebuffers(1,&framebuffer);
             if(worldVbo)glDeleteBuffers(1,&worldVbo);if(uiVbo)glDeleteBuffers(1,&uiVbo);
+            if(effectsVbo)glDeleteBuffers(1,&effectsVbo);
             if(worldVao)glDeleteVertexArrays(1,&worldVao);if(uiVao)glDeleteVertexArrays(1,&uiVao);
+            if(effectsVao)glDeleteVertexArrays(1,&effectsVao);
             if(uiTexture)glDeleteTextures(1,&uiTexture);if(worldProgram)glDeleteProgram(worldProgram);if(uiProgram)glDeleteProgram(uiProgram);
         }
         for(auto& target:swapchains)if(target.handle)xrDestroySwapchain(target.handle);

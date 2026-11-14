@@ -1,5 +1,7 @@
 # 来源与实现依据
 
+- [UX is Fine — Motion Services](https://www.uxisfine.com/motion-services)：重点参考用户指定的 HUD elements 视频的分层出现、细线延伸、焦点迁移与节点点亮。页面八段原视频已按完整时间序列检查，主参考过渡另作密集帧检查。详细时间点、取舍和实现映射见 [MOTION-DESIGN.md](MOTION-DESIGN.md)。仅借鉴运动规律，不分发参考视频或复用游戏美术。
+
 - [用户提供的正式设计](https://ucndr9srcy1r.feishu.cn/wiki/FbjuwwoHEiTtovktnzhcmrpfnv3)：玩家中心仿射切片 `world(q)=origin+Bθq`，旋转时调整 origin 保持玩家四维位置；Z/W 方向固定，虚拟平移只沿切片地面方向。
 - `core/Geometry4.kt`、`FourthwardGame.kt`、`TutorialLevels.kt`：本项目原创真实半空间/超球求交、胶囊体碰撞与六关教程实现。渲染器只消费真实截面，旗标仅注释已相交的目标。
 - 用户的六面墙要求与 `core/TutorialLevels.kt`：第三关改为四周、顶部和底部共六面墙，封闭初始三维切片中的体积，保留沿第四维绕行后返回内部的真实通路。底面上缘 Z = −0.5、顶面下缘 Z = 2.8，所有墙在 Y 方向半厚度为 0.65；闭合面、完整目标区域、正常站立与顶底碰撞均有回归测试。

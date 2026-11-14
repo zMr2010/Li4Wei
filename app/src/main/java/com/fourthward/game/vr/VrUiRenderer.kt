@@ -115,6 +115,9 @@ data class VrUiState(
     val headPose: VrPose,
     val lesson: VrLessonStatus? = null,
     val panelScale: Double = 1.0,
+    val active: Boolean = true,
+    val pageRevision: Long = 0L,
+    val feedbackRevision: Long = 0L,
 )
 
 /** One cached Android atlas, separate real 3D button quads, no Spatial SDK dependency. */
@@ -127,117 +130,319 @@ class VrUiRenderer {
     private val buttonRegions = List(7) { Region(620 + (it % 2) * 600, 280 + (it / 2) * 110, 580, 100) }
     private val pointerRegion = Region(1840, 280, 64, 64)
     private val lessonRegion = Region(0, 768, 900, 240)
-    private val lifts = mutableMapOf<PalmAction, Lift>()
+    private val motion = UiMotionState()
+    private val buttonMotion = mutableMapOf<PalmAction, UiButtonMotion>()
+    private var focusMotion = UiFocusMotion()
+    private val angleTrail = UiAngleTrail()
+    private var displayedPanel: VrPanelState? = null
+    private var displayedPose: VrPose? = null
+    private var displayedScale = 1.0
+    private var displayedPageKey: String? = null
+    private var desiredPageKey = ""
+    private var desiredPageRevision = 0L
     private var lastKey: Any? = null
-    private var lastUpload = Long.MIN_VALUE
-    private var uploadedLayout: PalmPanelSpec? = null
-    private var uploadedGroupIndex: Int? = null
-    private data class Lift(var start: Double = 0.0, var target: Double = 0.0, var at: Long = 0L) {
-        fun value(now: Long): Double {
-            val fraction = ((now - at).coerceAtLeast(0L) / 120_000_000.0).coerceIn(0.0, 1.0)
-            val smooth = fraction * fraction * (3.0 - 2.0 * fraction)
-            return start + (target - start) * smooth
-        }
-        fun update(next: Double, now: Long): Double {
-            if (next != target) { start = value(now); target = next; at = now }
-            return value(now)
-        }
-    }
+    private var lastUpload = Double.NEGATIVE_INFINITY
+    private var uploadedPage: String? = null
+    private var captionKey: Any? = null
+    private var captionAt = 0.0
+    private var completionKey: Any? = null
+    private var completedAt = Double.NEGATIVE_INFINITY
+    private val yellowRegion = Region(1050, 0, 8, 8)
+    private val whiteRegion = Region(1064, 0, 8, 8)
+    private val mintRegion = Region(1078, 0, 8, 8)
+    private val baseRegion = Region(1050, 16, 8, 8)
+    private val bevelRegion = Region(1064, 16, 8, 8)
+    private val scanRegion = Region(1100, 0, 128, 16)
+    private val glowRegion = Region(1240, 0, 96, 96)
+    private val mintGlowRegion = Region(1340, 0, 96, 96)
+
+    /** Gate hand contacts only; debug keyboard commands can interrupt any transition. */
+    fun interactionReady(pageRevision: Long): Boolean = pageRevision == desiredPageRevision && motion.interactionReady(desiredPageKey)
+
+    private fun pageKey(state: VrUiState): String = listOf(state.pageRevision, state.panel.layout,
+        state.panel.groupTitle, state.panel.groupIndex).joinToString("|")
 
     fun render(state: VrUiState, nowNanos: Long): VrRenderFrame {
-        val angle = normalized(state.angleDegrees)
-        val textAngle = String.format(Locale.ROOT, "%.1f°", if (angle >= 359.95) 0.0 else angle)
-        val panelVisible = state.panelPose != null
-        val comparisonLabels = state.lesson?.comparisonLabels().orEmpty()
-        val layout = state.panel.layout
+        desiredPageKey = pageKey(state)
+        desiredPageRevision = state.pageRevision
+        val movement = motion.update(nowNanos, state.active, state.panelPose != null, desiredPageKey, state.panel.layout.buttons.size)
+        val time = movement.clock
+        if (displayedPageKey != movement.pageKey) {
+            // The old layer has reached zero alpha; upload the new page on this same frame.
+            displayedPageKey = movement.pageKey
+            displayedPanel = state.panel
+            displayedPose = state.panelPose ?: displayedPose
+            displayedScale = state.panelScale
+            buttonMotion.clear()
+            focusMotion = UiFocusMotion()
+        } else if (movement.pageKey == desiredPageKey) {
+            displayedPanel = state.panel
+            if (state.panelPose != null) displayedPose = state.panelPose
+            displayedScale = state.panelScale
+        }
+        val panel = displayedPanel ?: state.panel
+        val visible = movement.panelOpacity > .001
+        val layout = panel.layout
         require(layout.widthDp <= panelRegion.width && layout.heightDp <= panelRegion.height && layout.buttons.size <= buttonRegions.size)
         val backing = panelRegion.copy(width = layout.widthDp, height = layout.heightDp)
-        val key = listOf(textAngle, state.tutorial, state.lesson, if (panelVisible) state.panel else null)
-        // A page switch must update its atlas and geometry in the same frame.
-        val texture = if (key != lastKey && (lastKey == null || uploadedLayout != layout ||
-                uploadedGroupIndex != state.panel.groupIndex || nowNanos - lastUpload >= 100_000_000L)) {
+        val angle = normalized(state.angleDegrees)
+        val trail = angleTrail.update(angle, time)
+        val textAngle = String.format(Locale.ROOT, "%.1f°", if (angle >= 359.95) 0.0 else angle)
+        val comparisonLabels = state.lesson?.comparisonLabels().orEmpty()
+        val nextCaptionKey = listOf(state.tutorial.levelCode, state.tutorial.title, state.tutorial.levelIndex, state.lesson?.stepIndex, state.lesson?.title,
+            state.tutorial.completed, state.tutorial.progressLabel)
+        val captionChanged = captionKey != nextCaptionKey
+        if (captionChanged) { captionKey = nextCaptionKey; captionAt = time }
+        val nextCompletion = Triple(state.tutorial.levelCode, state.tutorial.title, state.tutorial.completed)
+        if (completionKey != nextCompletion) {
+            if (state.tutorial.completed) completedAt = time
+            completionKey = nextCompletion
+        }
+        val key = listOf(textAngle, state.tutorial, state.lesson, panel)
+        val texture = if (key != lastKey && (lastKey == null || captionChanged || uploadedPage != movement.pageKey || time - lastUpload >= .10)) {
             val bitmap = Bitmap.createBitmap(2048, 1024, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
-            inRegion(canvas, angleRegion) { drawAngle(it, angle, textAngle, state.lesson != null) }
+            inRegion(canvas, angleRegion) { drawAngle(it, textAngle, state.lesson != null) }
             comparisonLabels.forEachIndexed { index, label ->
                 inRegion(canvas, comparisonRegions[index]) { drawComparisonLabel(it, label) }
             }
             inRegion(canvas, tutorialRegion) { drawTutorial(it, state.tutorial) }
-            inRegion(canvas, backing) { drawPanel(it, state.panel) }
+            inRegion(canvas, backing) { drawPanel(it, panel) }
             layout.buttons.forEachIndexed { index, button ->
                 val region = buttonRegions[index]
                 inRegion(canvas, region) {
                     val width = (button.width * layout.widthDp).toFloat()
                     val height = (button.height * layout.heightDp).toFloat()
                     it.scale(region.width / width, region.height / height)
-                    drawButton(it, button.action, state.panel, width, height)
+                    drawButton(it, button.action, panel, width, height)
                 }
             }
-            inRegion(canvas, pointerRegion) { drawPointer(it, state.panel) }
+            inRegion(canvas, pointerRegion) { drawPointer(it, panel) }
             state.lesson?.let { lesson -> inRegion(canvas, lessonRegion) { drawLesson(it, lesson) } }
-            lastKey = key
-            lastUpload = nowNanos
-            uploadedLayout = layout
-            uploadedGroupIndex = state.panel.groupIndex
+            drawMotionAssets(canvas)
+            lastKey = key; lastUpload = time; uploadedPage = movement.pageKey
             bitmap
         } else null
-        val quads = ArrayList<Float>(21 * 7)
-        fun add(region: Region, pose: VrPose, width: Double, height: Double, depth: Boolean) {
+        val quads = ArrayList<Float>(22 * 80)
+        fun add(region: Region, pose: VrPose, width: Double, height: Double, depth: Boolean, opacity: Double = 1.0) {
+            if (opacity <= .001 || width <= .000001 || height <= .000001) return
             val r = pose.right * width; val u = pose.up * height; val n = pose.normal; val p = pose.position
             quads.addAll(listOf(r.x.toFloat(), r.y.toFloat(), r.z.toFloat(), 0f,
                 u.x.toFloat(), u.y.toFloat(), u.z.toFloat(), 0f,
                 n.x.toFloat(), n.y.toFloat(), n.z.toFloat(), 0f,
                 p.x.toFloat(), p.y.toFloat(), p.z.toFloat(), 1f,
-                region.x / 2048f, region.y / 1024f,
-                (region.x + region.width) / 2048f, (region.y + region.height) / 1024f,
-                if (depth) 1f else 0f))
+                (region.x + .5f) / 2048f, (region.y + .5f) / 1024f,
+                (region.x + region.width - .5f) / 2048f, (region.y + region.height - .5f) / 1024f,
+                if (depth) 1f else 0f, opacity.coerceIn(0.0, 1.0).toFloat()))
         }
-        add(angleRegion, offset(state.headPose, .50, .52, -1.0), .24, .24 * 72 / 300, false)
+        fun line(pose: VrPose, x1: Double, y1: Double, x2: Double, y2: Double,
+                 thickness: Double, region: Region = yellowRegion, opacity: Double = 1.0, depth: Boolean = true) {
+            val dx = x2 - x1; val dy = y2 - y1
+            val length = kotlin.math.sqrt(dx * dx + dy * dy)
+            if (length < .00001) return
+            val at = offset(pose, (x1 + x2) * .5, (y1 + y2) * .5, .00035)
+            add(region, at.copy(right = pose.right * (dx / length) + pose.up * (dy / length),
+                up = pose.right * (-dy / length) + pose.up * (dx / length)), length, thickness, depth, opacity)
+        }
+        fun corners(pose: VrPose, width: Double, height: Double, reach: Double, opacity: Double,
+                    region: Region = yellowRegion, depth: Boolean = true) {
+            for (sx in listOf(-1.0, 1.0)) for (sy in listOf(-1.0, 1.0)) {
+                val x = sx * width / 2; val y = sy * height / 2
+                line(pose, x, y, x - sx * reach, y, .00065, region, opacity, depth)
+                line(pose, x, y, x, y - sy * reach, .00065, region, opacity, depth)
+            }
+        }
+
+        // The numeric reading is atlas-cached; the actual bar and its soft trail update at XR frequency.
+        val anglePose = offset(state.headPose, .50, .52, -1.0)
+        val angleWidth = .24
+        val angleHeight = angleWidth * 72 / 300
+        add(angleRegion, anglePose, angleWidth, angleHeight, false)
+        val barY = (.5 - 43.0 / 72) * angleHeight
+        val barLeft = (14.0 / 300 - .5) * angleWidth
+        val barWidth = 272.0 / 300 * angleWidth
+        line(anglePose, barLeft, barY, barLeft + barWidth * angle / 360, barY, .0010, yellowRegion, .9, false)
+        if (abs(trail - angle) < 45) line(anglePose, barLeft + barWidth * trail / 360, barY,
+            barLeft + barWidth * angle / 360, barY, .0021, yellowRegion, .18, false)
+        val activity = (abs(trail - angle) / 4.0).coerceIn(0.0, 1.0)
+        add(glowRegion, offset(anglePose, barLeft + barWidth * angle / 360, barY, .0005), .012, .012, false, .16 + .35 * activity)
+
+        val captionAlpha = UiMotionTokens.smooth((time - captionAt) / .28)
+        val captionOffset = -.009 * (1.0 - UiMotionTokens.out((time - captionAt) / .28))
         if (state.panel.groupTitle == null) {
-            if (state.lesson == null) add(tutorialRegion, offset(state.headPose, 0.0, -.43, -1.2), .58, .58 * 184 / 640, false)
-            else {
-                val modelAnchor = state.lesson.anchorPose?.takeIf { (state.lesson.geometryTopic != null || state.lesson.motionTopic != null) }
-                if (modelAnchor != null) {
-                    // Keep the comparison's caption with its models. A head-locked caption
-                    // would slide across the fixed controls when leaning or looking down.
-                    add(lessonRegion, offset(modelAnchor, 0.0, -.47, 0.0), .75, .75 * 240 / 900, true)
-                } else add(lessonRegion, offset(state.headPose, 0.0, -.57, -1.35), .75, .75 * 240 / 900, false)
+            if (state.lesson == null) {
+                val at = offset(state.headPose, 0.0, -.43 + captionOffset, -1.2)
+                add(tutorialRegion, at, .58, .58 * 184 / 640, false, captionAlpha)
+                val age = time - completedAt
+                if (age in 0.0..1.6 && state.tutorial.completed) {
+                    val reveal = UiMotionTokens.out(age / .38)
+                    val fade = (1.0 - ((age - .75) / .85).coerceIn(0.0, 1.0))
+                    corners(offset(at, 0.0, 0.0, .001), .58 + .018 * reveal,
+                        .58 * 184 / 640 + .012 * reveal, .022 * reveal, fade * .85, mintRegion, false)
+                    // Two fine traces meet in the centre, then settle; the world and camera stay still.
+                    val y = .58 * 184 / 1280 + .009
+                    line(at, -.19, y, -.19 + .19 * reveal, y, .0012, mintRegion, fade, false)
+                    line(at, .19, y, .19 - .19 * reveal, y, .0012, mintRegion, fade, false)
+                }
+            } else {
+                val modelAnchor = state.lesson.anchorPose?.takeIf { state.lesson.geometryTopic != null || state.lesson.motionTopic != null }
+                val at = if (modelAnchor != null) offset(modelAnchor, 0.0, -.47 + captionOffset, 0.0)
+                    else offset(state.headPose, 0.0, -.57 + captionOffset, -1.35)
+                add(lessonRegion, at, .75, .75 * 240 / 900, modelAnchor != null, captionAlpha)
+                val sweep = ((time - captionAt) / .65).coerceIn(0.0, 1.0)
+                if (sweep < 1.0) {
+                    val extent = .36 * UiMotionTokens.out(sweep)
+                    line(at, -.36, .098, -.36 + extent * 2, .098, .0007, yellowRegion,
+                        (1.0 - sweep) * .7, modelAnchor != null)
+                }
             }
             comparisonLabels.forEachIndexed { index, label ->
-                add(comparisonRegions[index], label.pose, .44, .44 * 72 / 340, true)
+                val alpha = UiMotionTokens.smooth((time - captionAt - index * .06) / .30)
+                add(comparisonRegions[index], label.pose, .44, .44 * 72 / 340, true, alpha)
             }
         }
-        state.panelPose?.let { pose ->
-            val scale = state.panelScale.coerceIn(1.0, 2.0)
-            val width = layout.widthMeters * scale
-            val height = layout.heightMeters * scale
-            // Scale depth with the dock so the backing stays behind the pressed face.
-            // Physical contact remains at zero regardless of visual animation.
-            add(backing, offset(pose, 0.0, 0.0, -.0015 * scale), width, height, true)
+        if (visible) displayedPose?.let { pose ->
+            val scale = displayedScale.coerceIn(1.0, 2.0)
+            val width = layout.widthMeters * scale * movement.panelScale
+            val height = layout.heightMeters * scale * movement.panelScale
+            val panelPose = offset(pose, 0.0, movement.panelOffsetY, movement.panelOffsetNormal)
+            val opacity = movement.panelOpacity
+            add(backing, offset(panelPose, 0.0, 0.0, -.0015 * scale), width, height, true, opacity)
+            // A quiet aperture forms before the content, echoing the reference HUD's layered reveal.
+            corners(offset(panelPose, 0.0, 0.0, -.0012 * scale), width - .001, height - .001,
+                .012 * UiMotionTokens.out(movement.entryAge / .3), opacity * .50)
             layout.buttons.forEachIndexed { index, button ->
-                val target = if (button.action in state.panel.disabled || state.panel.levelItem(button.action)?.unlocked == false) 0.0 else when (button.action) {
-                    state.panel.pressedAction -> -2.0
-                    state.panel.hoveredAction -> 4.0
-                    else -> 0.0
-                }
-                val lift = lifts.getOrPut(button.action) { Lift(at = nowNanos) }.update(target, nowNanos)
-                val buttonPose = offset(pose,
+                val enabled = button.action !in panel.disabled && panel.levelItem(button.action)?.unlocked != false && panel.chapterItem(button.action)?.unlocked != false
+                val response = buttonMotion.getOrPut(button.action) { UiButtonMotion() }.update(time,
+                    panel.hoveredAction == button.action, panel.pressedAction == button.action, enabled, state.feedbackRevision)
+                val alpha = movement.cardOpacity(index)
+                val buttonAnchor = offset(panelPose,
                     ((button.left + button.right) / 2.0 - .5) * width,
-                    (.5 - (button.top + button.bottom) / 2.0) * height,
-                    lift * width / layout.widthDp)
-                add(buttonRegions[index], buttonPose, button.width * width, button.height * height, true)
+                    (.5 - (button.top + button.bottom) / 2.0) * height + movement.cardOffsetY(index),
+                    movement.cardOffsetNormal(index))
+                val buttonPose = offset(buttonAnchor, 0.0, 0.0, response.liftMeters)
+                val faceScale = 1.0 - .02 * response.press
+                val bw = button.width * width * faceScale; val bh = button.height * height * faceScale
+                val baseDepth = -.0011 * scale
+                val baseWidth = button.width * width + .0012 * scale
+                val baseHeight = button.height * height + .0012 * scale
+                add(baseRegion, offset(buttonAnchor, 0.0, 0.0, baseDepth), baseWidth, baseHeight, true, alpha * .75)
+                // These four strips are real side planes, joining a stationary recessed base
+                // to the lifted face. Their changing parallax is visible when viewed obliquely.
+                val rise = response.liftMeters - baseDepth
+                val insetX = (baseWidth - bw) / 2.0
+                val insetY = (baseHeight - bh) / 2.0
+                fun bevel(centerX: Double, centerY: Double, along: Vec3, across: Vec3, length: Double, shade: Double) {
+                    val depth = across.length()
+                    val vertical = across * (1.0 / depth)
+                    val center = offset(buttonAnchor, centerX, centerY, (baseDepth + response.liftMeters) / 2.0)
+                    val sidePose = center.copy(right = along, up = vertical, normal = along.cross(vertical))
+                    add(bevelRegion, sidePose, length, depth, true, alpha * shade)
+                }
+                for (side in listOf(-1.0, 1.0)) {
+                    bevel(side * (bw / 2 + insetX / 2), 0.0, panelPose.up,
+                        panelPose.normal * rise - panelPose.right * (side * insetX), bh, .46)
+                    bevel(0.0, side * (bh / 2 + insetY / 2), panelPose.right,
+                        panelPose.normal * rise - panelPose.up * (side * insetY), bw, if (side > 0) .64 else .34)
+                }
+                add(buttonRegions[index], buttonPose, bw, bh, true, alpha)
+                if (response.hover > .001) {
+                    line(buttonPose, -bw * .46, bh * .5 - .001, bw * .46, bh * .5 - .001,
+                        .0007 * scale, yellowRegion, response.hover * alpha * .8)
+                    // Concentrated glow under the raised face communicates its physical depth.
+                    add(glowRegion, offset(panelPose,
+                        ((button.left + button.right) / 2 - .5) * width,
+                        (.5 - button.bottom) * height, -.0010 * scale), bw * .65, .014 * scale, true,
+                        response.hover * alpha * .20)
+                }
+                if (response.sweep < 1.0) {
+                    val progress = UiMotionTokens.out(response.sweep)
+                    val sweepWidth = bw * .22
+                    val x = -bw * .5 + sweepWidth * .5 + (bw - sweepWidth) * progress
+                    add(scanRegion, offset(buttonPose, x, 0.0, .0006), sweepWidth, bh * .86, true,
+                        alpha * .30 * kotlin.math.sin(kotlin.math.PI * response.sweep))
+                }
             }
-            validPointer(state.panel)?.let { pointer ->
-                val markerWidth = 64.0 * width / layout.widthDp
-                add(pointerRegion, offset(pose, (pointer.x - .5) * width, (.5 - pointer.y) * height, .0036 * scale),
-                    markerWidth, markerWidth, true)
+            val focusButton = layout.buttons.firstOrNull { it.action == panel.hoveredAction &&
+                it.action !in panel.disabled && panel.levelItem(it.action)?.unlocked != false && panel.chapterItem(it.action)?.unlocked != false }
+            val focus = focusMotion.update(time, focusButton?.let { listOf(it.left, it.top, it.right, it.bottom) })
+            if (focus[4] > .001 && movement.entryAge > .20) {
+                val at = offset(panelPose, ((focus[0] + focus[2]) / 2 - .5) * width,
+                    (.5 - (focus[1] + focus[3]) / 2) * height, .0052 * scale)
+                corners(at, (focus[2] - focus[0]) * width + .003 * scale,
+                    (focus[3] - focus[1]) * height + .003 * scale, .006 * scale,
+                    opacity * focus[4] * .9)
+            }
+            if (panel.chapterItems.isNotEmpty()) {
+                val connected = panel.chapterItems.first().completed
+                val tint = if (connected) yellowRegion else whiteRegion
+                val pathAlpha = opacity * if (connected) .75 else .20
+                fun treeLine(x1: Double, y1: Double, x2: Double, y2: Double, progress: Double) {
+                    val t = progress.coerceIn(0.0, 1.0)
+                    line(panelPose, (x1 - .5) * width, (.5 - y1) * height,
+                        (x1 + (x2 - x1) * t - .5) * width, (.5 - y1 - (y2 - y1) * t) * height,
+                        .00065 * scale, tint, pathAlpha)
+                }
+                val p = movement.branchProgress
+                treeLine(.5, .40, .5, .485, p * 3)
+                for (side in listOf(.26, .74)) {
+                    treeLine(.5, .485, side, .485, p * 3 - 1)
+                    treeLine(side, .485, side, .57, p * 3 - 2)
+                    val dotAlpha = UiMotionTokens.smooth((p - .60) / .40)
+                    add(tint, offset(panelPose, (side - .5) * width, (.5 - .485) * height, .0004),
+                        .0016 * scale, .0016 * scale, true, pathAlpha * dotAlpha)
+                }
+                if (connected && p > .995) {
+                    // One restrained signal crosses each branch; the nodes themselves remain stationary.
+                    val travel = ((time - .76) % 3.2).coerceAtLeast(0.0) / 3.2
+                    if (travel < .65) for (side in listOf(.26, .74)) {
+                        val q = travel / .65 * 3
+                        val x = when { q < 1 -> .5; q < 2 -> .5 + (side - .5) * (q - 1); else -> side }
+                        val y = when { q < 1 -> .40 + .085 * q; q < 2 -> .485; else -> .485 + .085 * (q - 2) }
+                        add(glowRegion, offset(panelPose, (x - .5) * width, (.5 - y) * height, .0005),
+                            .010 * scale, .010 * scale, true, opacity * .32)
+                    }
+                }
+            }
+            validPointer(panel)?.let { pointer ->
+                // The physical finger/contact coordinates never inherit the reveal transform.
+                val contactWidth = layout.widthMeters * scale
+                val contactHeight = layout.heightMeters * scale
+                val markerWidth = 64.0 * contactWidth / layout.widthDp
+                add(pointerRegion, offset(pose, (pointer.x - .5) * contactWidth, (.5 - pointer.y) * contactHeight, .006 * scale),
+                    markerWidth, markerWidth, true, opacity)
             }
         }
         return VrRenderFrame(uiBitmap = texture, uiQuads = quads.toFloatArray())
     }
 
     /** No retained Bitmap: the caller/native uploader owns each non-null frame bitmap. */
-    fun close() { lastKey = null; uploadedLayout = null; uploadedGroupIndex = null; lifts.clear() }
+    fun close() { lastKey = null; uploadedPage = null; buttonMotion.clear(); displayedPanel = null; displayedPose = null }
+
+    private fun drawMotionAssets(c: Canvas) {
+        fun solid(region: Region, color: Int) = inRegion(c, region) { it.drawColor(color) }
+        solid(yellowRegion, Ink.signal); solid(whiteRegion, Ink.ivory); solid(mintRegion, Ink.success)
+        solid(baseRegion, Color.argb(210, 38, 44, 43)); solid(bevelRegion, Color.argb(180, 115, 128, 124))
+        inRegion(c, scanRegion) {
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.LinearGradient(0f, 0f, 128f, 0f,
+                    intArrayOf(Color.TRANSPARENT, Color.argb(180, 255, 250, 0), Color.TRANSPARENT),
+                    floatArrayOf(0f, .5f, 1f), android.graphics.Shader.TileMode.CLAMP)
+            }
+            val band = android.graphics.Path().apply {
+                moveTo(25f, 0f); lineTo(55f, 0f); lineTo(103f, 16f); lineTo(73f, 16f); close()
+            }
+            it.drawPath(band, p)
+        }
+        for ((region, color) in listOf(glowRegion to Ink.signal, mintGlowRegion to Ink.success)) inRegion(c, region) {
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.RadialGradient(48f, 48f, 46f,
+                    intArrayOf(color, Color.argb(90, Color.red(color), Color.green(color), Color.blue(color)), Color.TRANSPARENT),
+                    floatArrayOf(0f, .18f, 1f), android.graphics.Shader.TileMode.CLAMP)
+            }
+            it.drawCircle(48f, 48f, 46f, p)
+        }
+    }
 
     private fun offset(pose: VrPose, x: Double, y: Double, z: Double) =
         pose.copy(position = pose.position + pose.right * x + pose.up * y + pose.normal * z)
@@ -252,13 +457,12 @@ class VrUiRenderer {
 
     private fun normalized(value: Double) = if (value.isFinite()) ((value % 360.0) + 360.0) % 360.0 else 0.0
 
-    private fun drawAngle(c: Canvas, angle: Double, formatted: String, lesson: Boolean) {
+    private fun drawAngle(c: Canvas, formatted: String, lesson: Boolean) {
         Ink.card(c, 300f, 72f)
         Ink.text(c, if (lesson) "示意 θ" else "θ", 14f, 29f, Ink.paint(if (lesson) 16f else 20f))
         val value = Ink.paint(24f, bold = true, mono = true)
         Ink.text(c, formatted, 286f - value.measureText(formatted), 29f, value)
         Ink.line(c, 14f, 43f, 286f, Ink.dim)
-        if (angle > 0) Ink.line(c, 14f, 43f, 14f + 272f * (angle / 360).toFloat(), Ink.signal)
         Ink.text(c, "0°", 14f, 61f, Ink.paint(12f, Ink.dim))
         Ink.text(c, "360° 周期", 224f, 61f, Ink.paint(12f, Ink.dim))
     }
@@ -333,17 +537,6 @@ class VrUiRenderer {
         if (state.chapterItems.isNotEmpty()) {
             Ink.text(c, "章节地图", 20f, 34f, Ink.paint(28f, bold = true))
             Ink.text(c, "先探索移动，再选择新的方向", 20f, 60f, Ink.paint(17f, Ink.dim))
-            val connected = state.chapterItems.first().completed
-            val path = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (connected) Ink.signal else Ink.dim
-                strokeWidth = 2.5f
-            }
-            c.drawLine(width * .5f, height * .40f, width * .5f, height * .485f, path)
-            c.drawLine(width * .26f, height * .485f, width * .74f, height * .485f, path)
-            for (x in listOf(.26f, .74f)) {
-                c.drawLine(width * x, height * .485f, width * x, height * .57f, path)
-                c.drawCircle(width * x, height * .485f, 4f, path)
-            }
             Ink.text(c, if (state.debugMode) "1–3 查看章节 · Esc 返回 · Tab / Enter 选择" else pointerHint,
                 20f, height - 8f, Ink.paint(16f, Ink.dim), width - 40f)
         } else if (state.groupTitle != null) {
@@ -367,7 +560,7 @@ class VrUiRenderer {
     private fun drawButton(c: Canvas, action: PalmAction, state: VrPanelState, width: Float, height: Float) {
         val item = state.levelItem(action)
         val chapter = state.chapterItem(action)
-        val disabled = action in state.disabled || item?.unlocked == false
+        val disabled = action in state.disabled || item?.unlocked == false || chapter?.unlocked == false
         val pressed = !disabled && state.pressedAction == action
         val active = !disabled && (state.hoveredAction == action ||
             (state.labels == null && action == PalmAction.TOGGLE_REFERENCE && state.referenceSelected))
