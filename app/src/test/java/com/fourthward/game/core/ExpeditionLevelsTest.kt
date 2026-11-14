@@ -22,13 +22,13 @@ class ExpeditionLevelsTest {
 
     @Test fun definitionsHaveStableIdsRealCheckpointVolumesAndThreeHintsPerStage() {
         assertEquals(listOf("crossed-portals", "hidden-gallery", "beacon-home"), levels.map { it.id })
-        for (level in levels) {
+        for ((index, level) in levels.withIndex()) {
             assertEquals("movement", level.groupId)
             assertEquals("移动", level.groupTitle)
             assertNull(level.geometryTopic)
             val mission = level.expedition!!
-            assertEquals(2, mission.checkpoints.size)
-            assertEquals(3, mission.stages.size)
+            assertEquals(listOf(1, 2, 2)[index], mission.checkpoints.size)
+            assertEquals(listOf(2, 3, 3)[index], mission.stages.size)
             assertTrue(mission.stages.all { it.hints.size == 3 })
             assertEquals(mission.checkpoints.map { it.volume } + level.goal, level.world.spheres)
             assertEquals(level.world.boxes.size, level.world.boxes.map { it.id }.distinct().size)
@@ -46,11 +46,14 @@ class ExpeditionLevelsTest {
         move(game, side = 1.4)
         move(game, depth = -2.8)
         assertEquals(setOf("amber-door"), game.completedCheckpointIds)
+        assertTrue(game.goalReady)
+        assertEquals("穿过青色门廊，到达出口。", game.missionInstruction)
+        assertFalse(game.level.world.spheres.any { it.id == "cyan-door" })
         assertFalse(game.completed)
         angle(game, 0.0)
         move(game, side = 2.4)
         move(game, depth = -2.6)
-        assertEquals(setOf("amber-door", "cyan-door"), game.completedCheckpointIds)
+        assertEquals(setOf("amber-door"), game.completedCheckpointIds)
         assertFalse(game.completed)
         move(game, depth = -.8)
         assertTrue(game.completed)
@@ -75,7 +78,7 @@ class ExpeditionLevelsTest {
 
     @Test fun initialCrossedDoorSliceIsClosedAcrossTheEntireFirstWall() {
         // At Y=0 the first aperture is absent. One full-width solid rectangle separates
-        // spawn from both checkpoints, and the outer shell closes both possible side routes.
+        // spawn from the waypoint and exit, and the outer shell closes both possible side routes.
         val firstWall = levels[0].world.boxes.filter { it.id.startsWith("amber-gate") }
         for (x in listOf(-1.2, -.6, 0.0, .6, 2.4, 3.6)) {
             assertTrue(firstWall.any { contains(it, Vec4(x, 0.0, 1.0, -2.0)) })
