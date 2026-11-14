@@ -1,0 +1,340 @@
+{
+  "source": "app/src/main/java/com/fourthward/game/core/LessonTutorial.kt",
+  "engine": "Fish Audio",
+  "endpoint": "https://api.fish.audio/v1/tts",
+  "model": "s2.1-pro-free",
+  "voice": "1bf1dee221e24db79346a1a35c3343a3",
+  "direction": "[calm]",
+  "speed": 1.0,
+  "format": "AAC-LC, mono, 128 kbit/s, M4A",
+  "clips": [
+    {
+      "id": "l1_plane",
+      "textSha256": "3966d22b4b18e8fe0e29e495fb471ad37e34e504d912e10a5ce308044f289779",
+      "audioSha256": "796098a389917e48bc434e5cad002f0c65b76c4e72dbda05b4b8980893ba205e",
+      "requestSha256": "e5c3bfc2ba95e26b0fa8864bff61f80f81d5cbc3130818924d93d4b08118bcf8",
+      "durationSeconds": 9.473741,
+      "bytes": 153800
+    },
+    {
+      "id": "l1_walk",
+      "textSha256": "365da7322b9007b6ab9ea9423d45fc0fb5736fb718dc0541c08d1796db0802eb",
+      "audioSha256": "6cd03bedc6f3203e8a6df5a85e9c37eedd4d6fd9aef091447a41ffdc1f58848f",
+      "requestSha256": "06e516c6b460ed657e3fb148615646ebeb898101415dec2e5bebc429e37f3f09",
+      "durationSeconds": 9.102222,
+      "bytes": 147373
+    },
+    {
+      "id": "l1_ready",
+      "textSha256": "de1cb1060f49c48e05c1923956d571e541653ccce220ac6d84ad227551be92e7",
+      "audioSha256": "f5cd02ea6df3730b81d94164e7ad9b68951c3630636fc54dfa7628c23d81a973",
+      "requestSha256": "289d15ee8b1656f7ac3fce74679068827677791a00b2772ae1b6f4be3c6b908b",
+      "durationSeconds": 10.21678,
+      "bytes": 162468
+    },
+    {
+      "id": "l2_hidden",
+      "textSha256": "1f5a7d03ca9ff1cd51c5b5a420b2d09ee89b69d99614a42c6ac4040ff72261de",
+      "audioSha256": "8055c7155ad2a89e495e8e630cfda2218e1079f331edfbe379d264cec7823d86",
+      "requestSha256": "ad519e585e73fc784639919c6dd56c11027f60f1fab0be7ea716a2069ee3eb2e",
+      "durationSeconds": 10.07746,
+      "bytes": 161847
+    },
+    {
+      "id": "l2_rotate",
+      "textSha256": "bbd1b74b78c2f0be760c75d3b319e921a8bb0bc88799b0e0f8b945d929476834",
+      "audioSha256": "a741f037b94dc134900551c0db2efd680b38bf12cfb543b09faaeb26cf3d5e42",
+      "requestSha256": "aba262fad9a50b883668f2fb251bb725841fc08e954f8d6baf070e66c3c76112",
+      "durationSeconds": 10.07746,
+      "bytes": 161382
+    },
+    {
+      "id": "l2_walk",
+      "textSha256": "ad0e111d511df99eb5f4f19c10d847a224c999b43fd1e210295f4f589d7c9925",
+      "audioSha256": "8be7096237bbb7519c64e70d9a858f819e059ded8b286530aad1a3067ca6d57f",
+      "requestSha256": "6591dcb29f94efc76138a2a247666eb80849923d472adbcc7a54ac4caad1072a",
+      "durationSeconds": 9.334422,
+      "bytes": 150481
+    },
+    {
+      "id": "l2_ready",
+      "textSha256": "cf80ff8fd25685872cbed5a905c1a058d396329dc5b85bd165cb305f7f0503a8",
+      "audioSha256": "310ca479e5a3bc118b3943ef2915a1b2f8880a225ec1e5cb26e078f7421db43e",
+      "requestSha256": "9b98099870d3fc444f26b972c79bfed27d09a63931c3246690485afea613b4e5",
+      "durationSeconds": 13.049615,
+      "bytes": 214148
+    },
+    {
+      "id": "l3_closed",
+      "textSha256": "94dbb49dfda84c7d8ad8381903f6d9420c323404ea57808d0e486f45df3bedd2",
+      "audioSha256": "2e6eaa81d5fbfaa9021111448256a132d825e2a5cd974d0ba76a629cfaa10809",
+      "requestSha256": "90d62f8f52f9212c2bb66633a729ee705aca873b39d40bd48c9d105dd5a39fd9",
+      "durationSeconds": 11.609977,
+      "bytes": 189805
+    },
+    {
+      "id": "l3_blocked",
+      "textSha256": "28c0728cb9e3631183b548877456e3dd5c9500f6d7ee827c1b0d3f6bf9a12a30",
+      "audioSha256": "e1e202fdf40d387dc5530fa6649eb2fcecabb75c463eee828ea3eed6d24b97ff",
+      "requestSha256": "78d8a99d90a93c9e5da2199a14b1755d890e78d1bdf1f0cd01567b7b38570f80",
+      "durationSeconds": 7.987664,
+      "bytes": 128587
+    },
+    {
+      "id": "l3_rotate_out",
+      "textSha256": "91ee3efedb87cafa80a1fba8d2fa5d2d23b834f513191b7d1da61d4e38018dc1",
+      "audioSha256": "b8c39824210397e7fdee47c981e10dfdacb5c53ee36b90f081d0a071ed4f310e",
+      "requestSha256": "6afb1218d8303cb4e17c82efbd0c7791affe728b39fad3fe729f220ef880dd70",
+      "durationSeconds": 9.055782,
+      "bytes": 147091
+    },
+    {
+      "id": "l3_leave",
+      "textSha256": "8fe9c830b52184b2bef019bf148ae92b6878be47b83f71b4bece910b50dd952b",
+      "audioSha256": "e6de55557a8701ed3d415239fa1142f6b5ba7d8cb62cb52e68d1a42171e42658",
+      "requestSha256": "149a85871b992dc6e97a7de1a0b735b751823b85edb5bb921314981be2c95678",
+      "durationSeconds": 9.659501,
+      "bytes": 154061
+    },
+    {
+      "id": "l3_rotate_parallel",
+      "textSha256": "278895a62aa9dffc04b96db52dbeaacea23a91e8fa37206c935477f333108e0e",
+      "audioSha256": "b476354a6be32fa729908e0fdc07849ba45180b5389b31630fd2ab86324ddfd5",
+      "requestSha256": "4970439cf45b18d3aad9b6996f4b84f3790947eb618fc49078b9d3672af07de3",
+      "durationSeconds": 9.659501,
+      "bytes": 154547
+    },
+    {
+      "id": "l3_align",
+      "textSha256": "d6d3e8f39732404bb741a870a9b281943255ce89d4e49cd8a6bec701d7d7ad25",
+      "audioSha256": "0e7d1838550c85f5307ea44b704d0458cc882bf3478caa56304b0d9114ac71e1",
+      "requestSha256": "14897f35af4fcfcdc491d1b6635a227cc787f47bdeeb78d6f3a88387a86326be",
+      "durationSeconds": 9.102222,
+      "bytes": 145899
+    },
+    {
+      "id": "l3_rotate_back",
+      "textSha256": "3e2c7f8c06bdfaeeec3c47666b3cf6d83213c7fcf177dd377f4f1e90bdbb62f9",
+      "audioSha256": "e88b1c9b035d207d8c489f7bf52d8b8a8b92130e9f3e7fdfe7ebfa33938158ef",
+      "requestSha256": "236834dbab9099e88e1f7da6515c6c4bb0b630c2ce65db80311b842264a09178",
+      "durationSeconds": 11.145578,
+      "bytes": 182968
+    },
+    {
+      "id": "l3_return",
+      "textSha256": "5f87cbc641b8202cafe1513f5c882c23823bf00436c1ac564ce203f3dae640c3",
+      "audioSha256": "4350536b938c70b03883a73cfe2e6cde303ad761dceeeee75cb3c49e1e104512",
+      "requestSha256": "7745c2c57795de0bbfcf3e1f772b1c3ba50d9889498351daba015822f0984112",
+      "durationSeconds": 9.287982,
+      "bytes": 148785
+    },
+    {
+      "id": "l3_ready",
+      "textSha256": "2a1874ca5f77dda198947c50348f76ba173f9dea10cbb2d95b3f73ae0da7ac64",
+      "audioSha256": "0d03c51acb8f99d83354bca9bb351b49c039b25054da585893f19fe2fddde556",
+      "requestSha256": "d5ecc2b679bdf5276d92804b0f11ff5dd22d4d1e3200c8950bfcb22ad9092561",
+      "durationSeconds": 15.23229,
+      "bytes": 246572
+    },
+    {
+      "id": "l4_small",
+      "textSha256": "a466eea2de7a45e7078a2654d362fdd9ff7bd3968bb2260409e50f4645d84699",
+      "audioSha256": "1c4c0a9959ddf17d3932baffd765c1a8b16c52cecf89a26daf93be675a8ff849",
+      "requestSha256": "7bd64cf9cb7d7930355371b67d3f5267f8c2b9a8aae28c830a0cba0afd99577c",
+      "durationSeconds": 13.746213,
+      "bytes": 223213
+    },
+    {
+      "id": "l4_center",
+      "textSha256": "0a15b1256342a7d02fa1551377cc7fec1a95ff0a3913462e39a0c31f31331c0e",
+      "audioSha256": "65c08132f3c81616928b4eaa0573631cb97ba5290fd6fb808b9a2d256cec1ac0",
+      "requestSha256": "1ea0941c6cf693f798da487f1895b20086a8803bb0d9b1d9259cb5fa15fad820",
+      "durationSeconds": 12.910295,
+      "bytes": 213822
+    },
+    {
+      "id": "l4_absent",
+      "textSha256": "9a591faec8175dcb7f7b5e2a2453cc517488c856ecb68cc472bd3184ed3a323c",
+      "audioSha256": "d3a68b2d2e26b037ad28ef6c1d46dd686225b1c2bf5208c990b1350109fefc89",
+      "requestSha256": "50cbf9ee6cd87adc3894fa55362ec4b42a51b9dbb184eaf0ebefcdb1e8f47f33",
+      "durationSeconds": 12.492336,
+      "bytes": 199257
+    },
+    {
+      "id": "l4_return",
+      "textSha256": "e96580955a467e0b5b27a23ea34802e4ef3230d36211bea87c691256349c3482",
+      "audioSha256": "b866c417cc8696fd1d79039fa2a6af2af5ff0d3503f362c39bf88a3a8d1cab35",
+      "requestSha256": "d79037cce6902ada4cd23c432262b9075e3686f39f39aef2b15f0ef012f9c1b0",
+      "durationSeconds": 13.328254,
+      "bytes": 217695
+    },
+    {
+      "id": "l4_ready",
+      "textSha256": "396571aede216df44cf2ce5abcf6f733da02df59ac5ca11983fa0f5f6fe03654",
+      "audioSha256": "2f7a4f863d245c31e3eec4c327316d31aa65c016f4d1696fcd9890c03777c0b1",
+      "requestSha256": "b2aacb5c033bf34a14c10821ab4665f0a72a6c070ed2ac8c5488d7c3e1ecaaba",
+      "durationSeconds": 14.582132,
+      "bytes": 235330
+    },
+    {
+      "id": "l5_cube",
+      "textSha256": "5e8d37a6331c6606587b3d686c68fce5edfd54a5bd1aa5668b5c40ff888ca643",
+      "audioSha256": "1227a8fef8875cca6f814534fc0927d172ea0f6b0d806c208c56de5f65404274",
+      "requestSha256": "9f7d0970c657462a270470ef6597c7a72f4cced6b29cbc89ff0ab54de15c2480",
+      "durationSeconds": 14.210612,
+      "bytes": 230968
+    },
+    {
+      "id": "l5_diagonal",
+      "textSha256": "b58b2ba5b32e7cea752fb0d75a12387329b5bff514f5fe5d8fe36631b13b108c",
+      "audioSha256": "389d64a1b6a94dbef889eaee2c6743c266dc6d08daf3cbd08b2f9d82a4090558",
+      "requestSha256": "1d9c8bfeb2a055f24a498f9c248cc8642349a16d77785e6dfbe16a38c7282270",
+      "durationSeconds": 13.096054,
+      "bytes": 213429
+    },
+    {
+      "id": "l5_quarter",
+      "textSha256": "4c271aad694cb18dd664eca17e6e1de45bbc24573315d827cef2c4379ef1c4a1",
+      "audioSha256": "13f683b1c75f312eb598a4be5f85a8f4cb511493741945613fcd2870c148b3ff",
+      "requestSha256": "96d03c07d82528fcc3493addb9726e5a25b55a30532158f9907191ce24b5e742",
+      "durationSeconds": 12.538776,
+      "bytes": 198945
+    },
+    {
+      "id": "l5_ready",
+      "textSha256": "def93fe65a6ee4004917e45ee3518e23cbda92a83d4655b3757a7fed70521f17",
+      "audioSha256": "06fe6f454124de7b80dba92fa8b745599d3459505faf5ffd8990f3bc9ffe695c",
+      "requestSha256": "74e7b9ea45c8c765c672c820b212da5bddd6658c28181cf956f487da32abb5b1",
+      "durationSeconds": 14.860771,
+      "bytes": 241196
+    },
+    {
+      "id": "l6_same",
+      "textSha256": "4a60b06d930775ff66e5249aa05f61a2faaf3bbba0a039dad6c4c91c6e332c51",
+      "audioSha256": "129e766abb6230e39ada260bd3ef846d4c70c33193c10a8bb3eac5219fca36df",
+      "requestSha256": "7cc6edcc5dded80aeb10d5e765ea5db50207c2f6e368e14a9b07723a3a923b37",
+      "durationSeconds": 14.210612,
+      "bytes": 231291
+    },
+    {
+      "id": "l6_diagonal",
+      "textSha256": "6ae7fbc346084b58c939fe0d4e2fb391e37d3039da50bfa153e971bde57f3d38",
+      "audioSha256": "f6387fe9156fdb97eb8bdeec8fe3ad6e25786f9803a9593b7a9fab8d013b040c",
+      "requestSha256": "6e5e069b073da0e605a4d64ad5b474453195f0049db7734b785ee7fe4e2dbdbd",
+      "durationSeconds": 13.931973,
+      "bytes": 226225
+    },
+    {
+      "id": "l6_quarter",
+      "textSha256": "273f1b0483105bffdbda87f5161c57f372a423bfa1f85769ae1ebc4a437de728",
+      "audioSha256": "99b279f815f6e9297c956d0a956d7cc9a97c2f51d046d63807ef9556ae8bf2a1",
+      "requestSha256": "7eb2eb33fb9464dfcc6346864c3a6733f561f5ad46c7c470a504b5916fec2871",
+      "durationSeconds": 13.003175,
+      "bytes": 214175
+    },
+    {
+      "id": "l6_ready",
+      "textSha256": "ea9a8a475459effa27c0834696cdb704fa8e89d653adad9a14a33d6742740934",
+      "audioSha256": "2f428a2adedf7c10e726ec68e2074014110c1618bb9193dbd290f57a0716fd7d",
+      "requestSha256": "93622204d203c87ad523e990b023d11a750706744a4fc751fbc08b02f7af7650",
+      "durationSeconds": 14.721451,
+      "bytes": 239144
+    },
+    {
+      "id": "l10_motion_plane",
+      "textSha256": "4ce1ed57f01e1518331c399dd2aec6e6b705667b3808d5e3c0c17d90810dec81",
+      "audioSha256": "5790cb87534d9484e55c7e15d570d1cf14190f55dc30cc5f88b0b391a890f663",
+      "requestSha256": "8adc41211d507175e1911a1ba3d246cb97b17b301fb67bab59ab1e8fbb30bb04",
+      "durationSeconds": 13.235374,
+      "bytes": 214056
+    },
+    {
+      "id": "l10_motion_enter",
+      "textSha256": "5cea1742abe251bc8732a62b2601d6064ffac1aab69aebc6abb619aefec8b18d",
+      "audioSha256": "cc51b1cef15a5a586bffac5c0a8ce01c68f440eebf6a2ff01caafa93b41fb802",
+      "requestSha256": "49713c506816480adbb56666b1790bbdead3115c2f483d9dfa22aa576b3d2647",
+      "durationSeconds": 13.421134,
+      "bytes": 221439
+    },
+    {
+      "id": "l10_motion_leave",
+      "textSha256": "a71033ea7c782bfc336d3dc9976e9aac778b2dd05e85378fe7c6298ed633da9b",
+      "audioSha256": "f9217d05debf52dcaf59f4715798901c21d2b137943ccf4385a5ceb0f023963d",
+      "requestSha256": "f3c76dba651689a115784bcb4cd5a95a569807d0573f1877c8060012e77d2bd3",
+      "durationSeconds": 13.560454,
+      "bytes": 219294
+    },
+    {
+      "id": "l10_motion_ready",
+      "textSha256": "9aee2ffdec4395699537c4cf1eb17f655e485281bc1e3845a7f39d4d336e4e2c",
+      "audioSha256": "875cb7287c5a0c39b4b25ed8b2007359f35607ee1a604c203bba073533d9864e",
+      "requestSha256": "f21fd74ec987197ae26382191c867a8544696e2f588853b937442ee605119f7f",
+      "durationSeconds": 13.374694,
+      "bytes": 219246
+    },
+    {
+      "id": "l11_motion_plane",
+      "textSha256": "965ffbc5c5b1a6593dbfb17f9f743f0989519956a23fd2849d2417f3a354572d",
+      "audioSha256": "0a43e967cee1a27e458ae66784cd780c6203c79a0b1a55744ab246c3643a797c",
+      "requestSha256": "3486856cc03407974a8ffd0882eefe44a270988470cfc47e2ef603155cbf9905",
+      "durationSeconds": 12.817415,
+      "bytes": 207266
+    },
+    {
+      "id": "l11_motion_enter",
+      "textSha256": "038334aafcdf8ec144ea0494c5130c2ae2563ffaa4519f233fb035357f62cc17",
+      "audioSha256": "e7c3c896b648c58dd3971855303475b6d3cb77454e930c5c37805ec506005902",
+      "requestSha256": "438abebf439ee1febd727cef03c43141d6df9309290ee50fc6bd094b3a6ce511",
+      "durationSeconds": 12.538776,
+      "bytes": 203001
+    },
+    {
+      "id": "l11_motion_leave",
+      "textSha256": "9a914524e101559192be3d93b528d8230bf7bbcc11e6cba437143a7f49d03ef9",
+      "audioSha256": "1a653c4107c77d13a31305749d23dc2578f00cd0620b0aae43e4249bff81902e",
+      "requestSha256": "fccba01d05fa49940ca19d2132bf21511d524d4f090c6ee0887ed6c1f95e8120",
+      "durationSeconds": 14.117732,
+      "bytes": 229212
+    },
+    {
+      "id": "l11_motion_ready",
+      "textSha256": "68755e157eb0dd1e56d511ef362b2a334c057b45df0a59486d4ee2640ec6188d",
+      "audioSha256": "6ddcd82f791c7d17645893cde782a6db00f7b4575eeb583c371ca0d71d2616d0",
+      "requestSha256": "8da848a8bd2f3fe732ca87a7a551ff4ddbe644d43bb899be9ac548e614ec4de4",
+      "durationSeconds": 12.910295,
+      "bytes": 209840
+    },
+    {
+      "id": "l12_motion_plane",
+      "textSha256": "c76e5430696c7a2fa35008ad27c3449b7c9fc4886748aeeae865f866a1d44c0f",
+      "audioSha256": "5ed095b29cc3fa16d6832e48b83edf2c9e715bb4728b68d4d3a93ca71842c0b7",
+      "requestSha256": "3a7eed06529581b105f4a87a1bb45fe3b24f3764cdbc0b7adccba3a4baab263e",
+      "durationSeconds": 15.789569,
+      "bytes": 255052
+    },
+    {
+      "id": "l12_motion_enter",
+      "textSha256": "df123171b91c219ea66a93ffe045ee18cab44b8bc5297750bd8ed4776c83c047",
+      "audioSha256": "aca7ba968cf4b6cb5f3283d5b06120ac7c8672447c346a662dd3e90e516eec70",
+      "requestSha256": "4e6e83bec0cfb8b7c862bd1761e387e961e73cae0cb415ed918cf591417c59e1",
+      "durationSeconds": 18.158005,
+      "bytes": 291788
+    },
+    {
+      "id": "l12_motion_leave",
+      "textSha256": "c242c03eb642db32c26fda4c2a1a8790ce2f678b6993414bfdf24fb21c78268f",
+      "audioSha256": "3f2cb21322c00fff1a6f511f1fc56808282ebc99e7f8f08354d2ed2c979d484d",
+      "requestSha256": "2d9e7a624319a037b2e26ec2bf55a82dde8c9001973a42f584bc689ed2156adb",
+      "durationSeconds": 16.625488,
+      "bytes": 267479
+    },
+    {
+      "id": "l12_motion_ready",
+      "textSha256": "0d186fe7bdbd38183ddaa826ad74ea7e8ab371374a14867c0f1a793094686ddf",
+      "audioSha256": "5c037ac5fc51044b8f2adad69988dc3620abef2ae40f2921dbe6be1391a86282",
+      "requestSha256": "742b2637f30b52f4306bc81b9142d2245656077f00a5683cfa069b25a8f75c7c",
+      "durationSeconds": 12.399456,
+      "bytes": 199855
+    }
+  ]
+}
