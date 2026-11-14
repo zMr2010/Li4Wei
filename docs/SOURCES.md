@@ -43,3 +43,9 @@
 - 用户提供的路线图仅作为依赖排列规则：前置纵向排列、独立路径并排；没有沿用其蓝底及红黄绿大色块。
 - 统一 `LevelDependencyGraph` 读取 `LevelProgress.requirementsForLevels`，只在绘图时约简冗余连接。全部十五关直接入图、六层视窗上下浏览；此前章节树和六格页面已由此替代，稳定 ID 和存档门槛保留。
 - 核对 ak-ui 版本 `ae5d2bd310844f9a75e3130c2055ea0f805caa86` 的 [card](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_ak-card.scss)、[button](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_ak-button.scss)、[tokens](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_tokens.scss)、[variables](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_variables.scss)：采用纸白/炭灰层级、暖黄色功能焦点、少量橙色标识、轻微切角、细边线与斜纹。绘制为原生 Canvas 图集及独立三维面片，未复制网页或游戏图像。
+
+## 教程主线与可选挑战修订
+
+- 用户修正关卡依赖：九个教程必须依次完成，游玩关卡为可选支线。移动三挑战在 1-3 后并行解锁，运动三挑战在 3-3 后并行解锁；挑战不阻塞后续教程。
+- `LevelCatalog` 统一教程分类、完整教程前缀与主线后继；`LevelProgress` 和 `LevelDependencyGraph` 共用这些前置条件。图上主线纵向，挑战向右平行展开；同章编号与旧存档稳定 ID 保留。
+- 「交错门廊」移除临近终点的第二路标，保留金色路标与两道门的几何，任务末段引导直接抵达出口。

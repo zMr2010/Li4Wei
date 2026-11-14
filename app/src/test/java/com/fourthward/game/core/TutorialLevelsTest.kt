@@ -23,7 +23,7 @@ class TutorialLevelsTest {
         }
     }
 
-    @Test fun theThreeGuidedRoutesContinueIntoMovementPuzzles() {
+    @Test fun theThreeGuidedRoutesContinueIntoRecognitionWithoutMandatoryPuzzles() {
         val game = FourthwardGame()
         assertFalse(game.selectLevel(3))
         assertTrue(game.movePlanar(Vec3(0.0, 0.0, -2.4)).completed)
@@ -42,13 +42,13 @@ class TutorialLevelsTest {
         assertTrue(game.movePlanar(Vec3(0.0, 0.0, -1.2)).completed)
         assertEquals(2, game.levelIndex)
         assertTrue(game.nextLevel())
-        assertEquals("crossed-portals", game.level.id)
-        assertEquals(6, game.levelIndex)
-        assertTrue(game.observationsComplete)
+        assertEquals("hypersphere", game.level.id)
+        assertEquals(3, game.levelIndex)
+        assertFalse(game.observationsComplete)
         assertFalse(game.nextLevel())
         game.restartLevel()
         assertFalse(game.completed)
-        assertEquals(6, game.levelIndex)
+        assertEquals(3, game.levelIndex)
     }
 
     @Test fun thirdGoalIsSeparatedFromSpawnByAClosedGroundedBarrierAtZeroAngle() {

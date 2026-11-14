@@ -6,7 +6,8 @@ import org.junit.Test
 class LevelDependencyGraphTest {
     private val levels = TutorialLevels.all()
     private val graph = LevelDependencyGraph(levels)
-    private val movement = listOf(0, 1, 2, 6, 7, 8)
+    private val tutorials = listOf(0, 1, 2, 3, 4, 5, 9, 10, 11)
+    private val challenges = listOf(6, 7, 8, 12, 13, 14)
 
     @Test fun stableIndicesAppearExactlyOnceAndAllDependenciesPointUpward() {
         assertEquals(levels.indices.toSet(), graph.nodes.map { it.index }.toSet())
@@ -16,25 +17,24 @@ class LevelDependencyGraphTest {
             assertTrue(byIndex.getValue(edge.fromIndex).row < byIndex.getValue(edge.toIndex).row)
             assertTrue(edge.fromIndex in graph.prerequisiteIndices(edge.toIndex))
         }
-        assertEquals((0..5).toList(), movement.map { byIndex.getValue(it).row })
-        movement.forEach { assertEquals(.48, byIndex.getValue(it).width, 0.0) }
-        assertEquals(12, graph.totalRows)
-        assertEquals(6, graph.maxFirstRow)
-        assertEquals(movement, graph.window(0).nodes.map { it.index })
-        assertEquals(9, graph.window(graph.maxFirstRow).nodes.size)
+        assertEquals((0..8).toList(), tutorials.map { byIndex.getValue(it).row })
+        tutorials.forEach { assertEquals(.22, byIndex.getValue(it).width, 0.0) }
+        assertEquals(10, graph.totalRows)
+        assertEquals(4, graph.maxFirstRow)
+        assertEquals(listOf(0, 1, 2, 3, 6, 7, 8, 4, 5), graph.window(0).nodes.map { it.index })
+        assertEquals(8, graph.window(graph.maxFirstRow).nodes.size)
     }
 
-    @Test fun independentChaptersBranchAtTheSameDepthAndRemainInTheirOwnLanes() {
+    @Test fun allNineTutorialsStayOnOneLineWithOptionalChallengesBesideTheirSuccessor() {
         val byIndex = graph.nodes.associateBy { it.index }
-        assertEquals(byIndex.getValue(3).row, byIndex.getValue(9).row)
-        (3..5).forEach { assertEquals(.28, byIndex.getValue(it).column, 0.0) }
-        (9..14).forEach { assertEquals(.72, byIndex.getValue(it).column, 0.0) }
-        (3..5).forEach { assertEquals(.36, byIndex.getValue(it).width, 0.0) }
-        (9..14).forEach { assertEquals(.36, byIndex.getValue(it).width, 0.0) }
-        assertTrue(LevelMapEdge(8, 3) in graph.edges)
-        assertTrue(LevelMapEdge(8, 9) in graph.edges)
-        assertFalse(graph.edges.any { it.fromIndex in 3..5 && it.toIndex in 9..14 })
-        assertFalse(graph.edges.any { it.fromIndex in 9..14 && it.toIndex in 3..5 })
+        tutorials.forEach { assertEquals(.14, byIndex.getValue(it).column, 0.0) }
+        tutorials.zipWithNext().forEach { (a, b) -> assertTrue(LevelMapEdge(a, b) in graph.edges) }
+        assertEquals(listOf(3, 3, 3), (6..8).map { byIndex.getValue(it).row })
+        assertEquals(listOf(.385, .62, .855), (6..8).map { byIndex.getValue(it).column })
+        assertEquals(byIndex.getValue(3).row, byIndex.getValue(6).row)
+        assertEquals(listOf(9, 9, 9), (12..14).map { byIndex.getValue(it).row })
+        challenges.forEach { assertEquals(.21, byIndex.getValue(it).width, 0.0) }
+        assertFalse(graph.edges.any { it.fromIndex in challenges })
         assertEquals(14, graph.edges.size)
     }
 
@@ -46,12 +46,13 @@ class LevelDependencyGraphTest {
         levels.indices.forEach { index ->
             assertTrue(ancestors(index).containsAll(graph.prerequisiteIndices(index)))
         }
-        assertEquals(movement.toSet(), graph.prerequisiteIndices(3))
-        assertEquals(movement.toSet() + 9, graph.prerequisiteIndices(10))
+        assertEquals(setOf(0, 1, 2), graph.prerequisiteIndices(3))
+        assertEquals(setOf(0, 1, 2), graph.prerequisiteIndices(8))
+        assertEquals(tutorials.take(7).toSet(), graph.prerequisiteIndices(10))
         assertEquals(listOf(LevelMapEdge(9, 10)), graph.edges.filter { it.toIndex == 10 })
     }
 
-    @Test fun missingOldClearsCannotBypassFullChapterGateThroughAReducedLine() {
+    @Test fun missingOldClearsCannotBypassTheTutorialPrefixThroughAReducedLine() {
         val oldIds = setOf(levels[8].id, levels[3].id)
         val progress = LevelProgress.forLevels(levels, oldIds)
         assertTrue(progress.isUnlocked(3)) // Previously completed levels remain replayable.
@@ -88,11 +89,11 @@ class LevelDependencyGraphTest {
     }
 
     @Test fun visiblePrerequisitesSitBelowTheirSuccessorsAndCrossingLinesAreRetained() {
-        val window = graph.window(5)
+        val window = graph.window(2)
         val byIndex = window.nodes.associateBy { it.index }
-        assertEquals(listOf(8, 3, 9, 4, 10, 5, 11, 12, 13), window.nodes.map { it.index })
-        assertTrue(LevelMapEdge(7, 8) in window.edges) // Continue below this viewport.
-        assertTrue(LevelMapEdge(13, 14) in window.edges) // Continue above this viewport.
+        assertEquals(listOf(2, 3, 6, 7, 8, 4, 5, 9, 10), window.nodes.map { it.index })
+        assertTrue(LevelMapEdge(1, 2) in window.edges) // Continue below this viewport.
+        assertTrue(LevelMapEdge(10, 11) in window.edges) // Continue above this viewport.
         assertFalse(LevelMapEdge(0, 1) in window.edges)
         window.edges.filter { it.fromIndex in byIndex && it.toIndex in byIndex }.forEach {
             assertTrue(LevelMapWindow.centerY(byIndex.getValue(it.fromIndex).row, window.firstRow) >
@@ -111,18 +112,20 @@ class LevelDependencyGraphTest {
         assertEquals(PalmAction.NEXT_GROUP, window.layout.hitTest(.795, controlsY))
     }
 
-    @Test fun parallelMovementChallengesUseOneRowWithoutIntroducingFalseDependencies() {
+    @Test fun denserOptionalRowsRemainWholeAndWithinInputCapacity() {
         val requirements = LevelProgress.requirementsForLevels(levels).toMutableMap()
-        listOf(6, 7, 8).forEach { requirements[levels[it].id] = setOf(levels[2].id) }
+        // Two adjacent four-node rows exceed nine slots across six layers.
+        (12..14).forEach { requirements[levels[it].id] = tutorials.take(4).map { levels[it].id }.toSet() }
         val parallel = LevelDependencyGraph(levels, requirements)
         val challengeNodes = parallel.nodes.filter { it.index in 6..8 }
         assertEquals(listOf(3, 3, 3), challengeNodes.map { it.row })
-        assertEquals(listOf(.20, .50, .80), challengeNodes.map { it.column })
-        assertTrue(challengeNodes.all { it.width == .27 })
-        assertEquals(listOf(6, 7, 8), parallel.window(3).nodes.take(3).map { it.index })
+        assertEquals(listOf(.385, .62, .855), challengeNodes.map { it.column })
+        assertTrue(challengeNodes.all { it.width == .21 })
+        assertEquals(listOf(3, 6, 7, 8), parallel.window(3).nodes.take(4).map { it.index })
         assertFalse(parallel.edges.any { it.fromIndex in 6..8 && it.toIndex in 6..8 })
         val windows = (0..parallel.maxFirstRow).map(parallel::window)
         assertTrue(windows.all { it.nodes.size <= 9 })
+        assertTrue(windows.any { it.visibleRows < LevelMapWindow.VISIBLE_ROWS })
         assertEquals(levels.indices.toSet(), windows.flatMap { it.nodes }.map { it.index }.toSet())
         assertTrue(windows.last().nodes.any { it.row == parallel.totalRows - 1 })
         windows.forEach { window ->
@@ -131,21 +134,19 @@ class LevelDependencyGraphTest {
                 assertEquals(parallel.nodes.filter { it.row == row }, included)
             }
         }
-        listOf(3, 9).forEach { target ->
-            assertEquals(setOf(6, 7, 8), parallel.edges.filter { it.toIndex == target }.map { it.fromIndex }.toSet())
-        }
+        assertFalse(parallel.edges.any { it.fromIndex in challenges })
     }
 
     @Test fun changingViewportRequiresAFreshFrontToPanelPoke() {
         val detector = PalmPoke()
         val first = graph.window(0)
         val y = LevelMapWindow.BOTTOM_CENTER_Y
-        detector.update(.5, y, .05, true, .016, first.layout)
-        assertEquals(PalmAction.LEVEL_1, detector.update(.5, y, .004, true, .016, first.layout).action)
+        detector.update(.14, y, .05, true, .016, first.layout)
+        assertEquals(PalmAction.LEVEL_1, detector.update(.14, y, .004, true, .016, first.layout).action)
         val second = graph.window(1)
-        assertNull(detector.update(.5, y, .004, true, .016, second.layout).action)
-        detector.update(.5, y, .05, true, .016, second.layout)
-        assertEquals(PalmAction.LEVEL_1, detector.update(.5, y, .004, true, .016, second.layout).action)
+        assertNull(detector.update(.14, y, .004, true, .016, second.layout).action)
+        detector.update(.14, y, .05, true, .016, second.layout)
+        assertEquals(PalmAction.LEVEL_1, detector.update(.14, y, .004, true, .016, second.layout).action)
         assertEquals(1, second.levelForAction(PalmAction.LEVEL_1))
     }
 
@@ -154,8 +155,8 @@ class LevelDependencyGraphTest {
         val window = graph.window(0)
         val disabled = setOf(PalmAction.LEVEL_2, PalmAction.LEVEL_3)
         val y = LevelMapWindow.centerY(1, 0)
-        detector.update(.5, y, .05, true, .016, window.layout, disabled)
-        val contact = detector.update(.5, y, .004, true, .016, window.layout, disabled)
+        detector.update(.14, y, .05, true, .016, window.layout, disabled)
+        val contact = detector.update(.14, y, .004, true, .016, window.layout, disabled)
         assertNull(contact.action)
         assertNull(contact.hoveredAction)
     }

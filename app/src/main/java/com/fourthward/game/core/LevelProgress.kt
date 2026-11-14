@@ -40,14 +40,11 @@ class LevelProgress(
     companion object {
         /** Shared by progression and its map. Display edges may omit transitive requirements. */
         fun requirementsForLevels(levels: List<TutorialLevel>): Map<String, Set<String>> {
-            val groups = levels.groupBy { it.groupId }
-            val movement = groups["movement"].orEmpty().map { it.id }.toSet()
-            return groups.flatMap { (group, entries) ->
-                entries.mapIndexed { index, level ->
-                    val chapterGate = if (group in setOf("recognition", "motion")) movement else emptySet()
-                    level.id to (chapterGate + if (index > 0) setOf(entries[index - 1].id) else emptySet())
-                }
-            }.toMap()
+            if (levels.isEmpty()) return emptyMap()
+            val catalog = LevelCatalog(levels)
+            return levels.indices.associate { index ->
+                levels[index].id to catalog.requiredTutorialIndices(index).map { levels[it].id }.toSet()
+            }
         }
 
         fun forLevels(levels: List<TutorialLevel>, completedIds: Set<String> = emptySet()): LevelProgress =

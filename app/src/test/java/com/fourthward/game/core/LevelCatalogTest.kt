@@ -22,7 +22,7 @@ class LevelCatalogTest {
         assertNull(catalog.groups[0].levelAtRow(-1))
     }
 
-    @Test fun nextLevelStaysWithinItsChapterAndStopsAtBothBranches() {
+    @Test fun chapterLookupRemainsPresentationOrderWithoutControllingTheMainline() {
         assertEquals(6, catalog.nextWithinChapter(2))
         assertEquals(4, catalog.nextWithinChapter(3))
         assertEquals(12, catalog.nextWithinChapter(11))
@@ -31,29 +31,28 @@ class LevelCatalogTest {
         assertNull(catalog.nextWithinChapter(14))
     }
 
-    @Test fun movementCompletionOpensBothBranchesIndependently() {
-        val progress = LevelProgress.forLevels(levels, catalog.groups[0].levelIndices.map { levels[it].id }.toSet())
-        assertTrue(catalog.chapterComplete(0, progress))
-        assertTrue(progress.isUnlocked(3))
-        assertTrue(progress.isUnlocked(9))
-        assertFalse(progress.isUnlocked(4))
-        assertFalse(progress.isUnlocked(10))
-        assertTrue(progress.recordCompletion(9))
-        assertTrue(progress.isUnlocked(10))
-        assertFalse(progress.isUnlocked(4))
+    @Test fun tutorialRouteSkipsOptionalMissionsWithoutChangingChapterNumbers() {
+        val tutorials = listOf(0, 1, 2, 3, 4, 5, 9, 10, 11)
+        assertEquals(tutorials, catalog.tutorialIndices)
+        tutorials.zipWithNext().forEach { (from, to) -> assertEquals(to, catalog.nextInRoute(from)) }
+        listOf(6, 7, 8, 12, 13, 14).forEach {
+            assertFalse(catalog.isTutorial(it))
+            assertNull(catalog.nextInRoute(it))
+        }
+        assertNull(catalog.nextInRoute(11))
+        assertEquals(listOf(0, 1, 2), catalog.requiredTutorialIndices(6))
+        assertEquals(listOf(0, 1, 2), catalog.requiredTutorialIndices(3))
+        assertEquals(tutorials, catalog.requiredTutorialIndices(14))
     }
 
-    @Test fun oldClearsKeepTheirIdentityAndChapterLocalSuccessorsStayLocked() {
+    @Test fun oldClearsKeepTheirIdentityAndOptionalChallengesNeverGateTheMainline() {
         val oldIds = listOf("walk", "turn", "around", "hypersphere", "tesseract", "ambiguity")
         assertEquals(oldIds, levels.take(6).map { it.id })
         val progress = LevelProgress.forLevels(levels, oldIds.toSet())
-        assertTrue(progress.isUnlocked(6))
         assertTrue(catalog.chapterComplete(1, progress))
-        assertFalse(progress.isUnlocked(7))
-        assertFalse(progress.isUnlocked(9))
-        assertTrue(progress.recordCompletion(6))
-        assertTrue(progress.recordCompletion(7))
-        assertTrue(progress.recordCompletion(8))
-        assertTrue(progress.isUnlocked(9))
+        assertFalse(catalog.chapterComplete(0, progress))
+        listOf(6, 7, 8, 9).forEach { assertTrue(progress.isUnlocked(it)) }
+        assertFalse(progress.isUnlocked(10))
+        assertEquals(oldIds.toSet(), progress.completedIds)
     }
 }

@@ -8,7 +8,7 @@ import org.junit.Test
 
 class VrLevelMapStateTest {
     private fun state(nodes: List<VrMapNode>, edges: List<VrMapEdge>, firstRow: Int = 0) =
-        VrLevelMapState(nodes, edges, firstRow, 12, 0, 15)
+        VrLevelMapState(nodes, edges, firstRow, 10, 0, 15)
 
     @Test fun edgesStopAtTheSameButtonEdgesUsedByPhysicalHitTesting() {
         val map = state(listOf(VrMapNode(0, 0, .5, true, true), VrMapNode(1, 1, .5, false, true)), listOf(VrMapEdge(0, 1)))
@@ -20,17 +20,20 @@ class VrLevelMapStateTest {
         assertFalse(segment.completed)
     }
 
-    @Test fun forkRoutesAreSeparateAndDoNotJoinIndependentChildren() {
-        val map = state(listOf(VrMapNode(8, 0, .5, true, true), VrMapNode(3, 1, .28, true, true),
-            VrMapNode(9, 1, .72, false, true)), listOf(VrMapEdge(8, 3), VrMapEdge(8, 9)))
+    @Test fun optionalChallengeBranchesDoNotInterruptOrRejoinTheTutorialLine() {
+        val map = state(listOf(VrMapNode(2, 0, .14, true, true), VrMapNode(3, 1, .14, true, true),
+            VrMapNode(6, 1, .385, false, true), VrMapNode(7, 1, .62, false, true),
+            VrMapNode(8, 1, .855, false, true)),
+            listOf(VrMapEdge(2, 3), VrMapEdge(2, 6), VrMapEdge(2, 7), VrMapEdge(2, 8)))
         val paths = map.segments().groupBy { it.toIndex }
-        assertEquals(setOf(3, 9), paths.keys)
-        assertTrue(paths.values.all { it.size == 3 })
+        assertEquals(setOf(3, 6, 7, 8), paths.keys)
+        assertEquals(1, paths.getValue(3).size)
+        (6..8).forEach { assertEquals(3, paths.getValue(it).size) }
         assertTrue(paths.getValue(3).all { it.completed })
-        assertTrue(paths.getValue(9).all { it.available && !it.completed })
-        assertEquals(.28, paths.getValue(3).last().x2, 1e-12)
-        assertEquals(.72, paths.getValue(9).last().x2, 1e-12)
-        assertFalse(map.segments().any { it.fromIndex == 3 || it.fromIndex == 9 })
+        (6..8).forEach { assertTrue(paths.getValue(it).all { path -> path.available && !path.completed }) }
+        assertEquals(.14, paths.getValue(3).last().x2, 1e-12)
+        assertEquals(listOf(.385, .62, .855), (6..8).map { paths.getValue(it).last().x2 })
+        assertTrue(map.segments().all { it.fromIndex == 2 })
     }
 
     @Test fun incomingAndOutgoingRoutesClipWithoutLeakingIntoHeaderOrControls() {
@@ -45,9 +48,9 @@ class VrLevelMapStateTest {
         assertTrue(segments.all { !it.completed && !it.available })
     }
 
-    @Test fun gateStillLooksLockedWhenAnOldSaveHasOnlyTheLastMovementClear() {
-        val map = state(listOf(VrMapNode(8, 0, .5, true, true), VrMapNode(9, 1, .72, false, false)),
-            listOf(VrMapEdge(8, 9)))
+    @Test fun lastTutorialClearWithoutItsPrefixDoesNotLightTheNextTutorialRoute() {
+        val map = state(listOf(VrMapNode(2, 0, .14, true, true), VrMapNode(3, 1, .14, false, false)),
+            listOf(VrMapEdge(2, 3)))
         assertTrue(map.segments().all { !it.available && !it.completed })
     }
 

@@ -17,7 +17,10 @@ class FourthwardGame(
     private var animatedWorld: World4? = null
     val world: World4 get() = animatedWorld ?: level.world
     private val catalog by lazy { LevelCatalog(levels) }
-    val nextLevelIndex: Int? get() = catalog.nextWithinChapter(levelIndex)
+    val nextLevelIndex: Int? get() = catalog.nextInRoute(levelIndex)
+    val nextLevelUnlocked: Boolean get() = nextLevelIndex?.let(progress::isUnlocked) == true
+    val tutorialRouteComplete: Boolean get() = catalog.tutorialIndices.isNotEmpty() &&
+        catalog.tutorialIndices.all(progress::isCompleted)
     var motionTimeSeconds: Double = 0.0; private set
     var motionBlocked: Boolean = false; private set
     private var motionObservedSeconds = 0.0
@@ -45,14 +48,15 @@ class FourthwardGame(
         else GeometryExhibits.observations(it)[observationStep].instruction
     }
     val observationHint: String? get() = if (level.motionTopic != null) {
-        if (observationsComplete) "按 N 继续，或按 H 回看并列演示。"
+        if (observationsComplete) if (nextLevelUnlocked) "按 N 进入下一课，或按 H 回看并列演示。"
+            else "按 N 查看关卡路线，或按 H 回看并列演示。"
         else if (abs(sin(frame.angleRadians)) > .04) "用「θ归零」回到起初的切片方向，再比较这轮穿行。"
         else if (abs(frame.signedDistance(Vec4.ZERO)) > .12) "从起点重新观察，可以再看一次物体完整穿过的过程。"
         else level.hint
     } else level.geometryTopic?.let {
         when {
-            observationsComplete -> if (nextLevelIndex != null) "按 N 进入下一关，或按 T 重新观察本关。"
-                else "本章已完成。按 N 返回章节地图，或按 T 重新观察。"
+            observationsComplete -> if (nextLevelUnlocked) "按 N 进入下一课，或按 T 重新观察本关。"
+                else "本课完成。按 N 返回关卡路线，或按 T 重新观察。"
             else -> GeometryExhibits.observations(it)[observationStep].hint
         }
     }

@@ -19,7 +19,7 @@ data class LevelMapWindow(
         const val VISIBLE_ROWS = 6
         const val WIDTH_DP = 600
         const val HEIGHT_DP = 680
-        const val WIDTH_METERS = .44
+        const val WIDTH_METERS = .50
         const val NODE_HEIGHT = 68.0 / HEIGHT_DP
         const val BOTTOM_CENTER_Y = 552.0 / HEIGHT_DP
         const val ROW_SPACING = 88.0 / HEIGHT_DP
@@ -71,21 +71,19 @@ class LevelDependencyGraph(
         }
         levels.indices.forEach(::visit)
 
+        val catalog = LevelCatalog(levels)
         nodes = levels.indices.map { index ->
             val row = rows.getValue(index)
-            val peers = levels.indices.filter { rows.getValue(it) == row && levels[it].groupId == levels[index].groupId }
-            val column = when (levels[index].groupId) {
-                "recognition" -> .28
-                "motion" -> .72
-                else -> if (peers.size == 1) .5 else .20 + .60 * peers.indexOf(index) / (peers.size - 1)
-            }
-            val width = when (levels[index].groupId) {
-                "recognition", "motion" -> .36
-                else -> if (peers.size == 1) .48 else .27
-            }
+            val tutorial = catalog.isTutorial(index)
+            val peers = levels.indices.filter { rows.getValue(it) == row && !catalog.isTutorial(it) }
+            require(peers.size <= 3) { "A route row supports up to three optional challenges" }
+            val column = if (tutorial) .14 else listOf(.385, .62, .855)[peers.indexOf(index)]
+            val width = if (tutorial) .22 else .21
             LevelMapNode(index, row, column, width)
         }.sortedWith(compareBy<LevelMapNode> { it.row }.thenBy { it.column }.thenBy { it.index })
-        require(nodes.groupBy { it.row }.values.all { it.size <= 3 }) { "A route row supports up to three parallel levels" }
+        require(nodes.groupBy { it.row }.values.all { row -> row.count { catalog.isTutorial(it.index) } <= 1 }) {
+            "Tutorials form a single sequential route"
+        }
         edges = levels.indices.flatMap { target ->
             val required = requirements.getValue(target)
             required.filter { candidate ->

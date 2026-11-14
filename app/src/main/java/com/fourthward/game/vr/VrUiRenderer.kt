@@ -619,7 +619,8 @@ class VrUiRenderer {
             val counter = String.format(Locale.ROOT, "%02d / %02d", map.totalCompleted, map.totalLevels)
             Ink.text(c, counter, width - 107f, 31f, Ink.paint(20f, Ink.black, true, true))
             Ink.line(c, 22f, 44f, width - 22f, Ink.alpha(Ink.ivory, 48))
-            Ink.text(c, "沿线向上探索", 22f, 64f, Ink.paint(13f, Ink.dim))
+            Ink.text(c, "教程主线", 22f, 64f, Ink.paint(13f, Ink.ivory, true))
+            Ink.text(c, "游玩支线 · 可选", 170f, 64f, Ink.paint(12f, Ink.dim))
             listOf(Triple(314f, "已通过", 2), Triple(402f, "已解锁", 1), Triple(490f, "未解锁", 0)).forEach { (x, label, status) ->
                 val tint = when (status) { 2 -> Ink.success; 1 -> Ink.signal; else -> Ink.dim }
                 Ink.status(c, x, 58f, 9f, status, tint)
@@ -679,7 +680,7 @@ class VrUiRenderer {
         val pressed = !disabled && state.pressedAction == action
         val active = !disabled && (state.hoveredAction == action ||
             (state.labels == null && action == PalmAction.TOGGLE_REFERENCE && state.referenceSelected))
-        val light = active && !disabled && item != null
+        val light = !disabled && item != null && (active || (state.map != null && item.hasIntroduction))
         val fill = when { pressed -> Ink.signal; disabled -> Color.rgb(33, 36, 38); light -> Ink.ivory; else -> Color.rgb(42, 45, 47) }
         val foreground = when { disabled -> Color.rgb(139, 145, 146); pressed || light -> Ink.black; else -> Ink.ivory }
         val accent = when { pressed -> Ink.black; item?.completed == true -> if (light) Ink.deepSuccess else Ink.success

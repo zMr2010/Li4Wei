@@ -49,7 +49,7 @@ class LevelProgressStoreTest {
         assertEquals(setOf("walk"), progress.completedIds)
     }
 
-    @Test fun oldNineLevelSaveMigratesByIdAndUnlocksTheNewBranchWithoutLosingClears() {
+    @Test fun oldNineLevelSaveMigratesByIdAndUnlocksMotionTutorialsWithoutLosingClears() {
         val memory = MemoryPreferences()
         val levels = TutorialLevels.all()
         val oldIds = levels.take(9).map { it.id }.toSet()

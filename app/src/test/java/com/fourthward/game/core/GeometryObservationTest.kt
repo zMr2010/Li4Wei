@@ -194,7 +194,7 @@ class GeometryObservationTest {
         assertNull(basic.observationHint)
     }
 
-    @Test fun recognitionProgressStaysInsideItsBranch() {
+    @Test fun recognitionProgressContinuesIntoMotionTutorials() {
         val levels = TutorialLevels.all()
         assertEquals(listOf("walk", "turn", "around", "hypersphere", "tesseract", "ambiguity"), levels.take(6).map { it.id })
         assertEquals(listOf("movement", "recognition", "motion"), levels.map { it.groupId }.distinct())
@@ -219,9 +219,11 @@ class GeometryObservationTest {
             } else {
                 assertTrue(game.progress.isUnlocked(6))
                 assertTrue(game.observationHint!!.contains("按 N"))
-                assertFalse(game.nextLevel())
-                assertNull(game.nextLevelIndex)
-                assertTrue(game.completed)
+                assertTrue(game.progress.isUnlocked(9))
+                assertEquals(9, game.nextLevelIndex)
+                assertTrue(game.nextLevel())
+                assertEquals("motion-normal", game.level.id)
+                assertFalse(game.completed)
             }
         }
         assertEquals(9, progress.completedCount)

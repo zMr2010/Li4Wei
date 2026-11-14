@@ -585,8 +585,8 @@ class VrGameBridge(context: Context) {
     }
 
     private fun contextLabel(): String = when {
-        game.completed && game.nextLevelIndex != null -> "下一关"
-        game.completed -> "章节地图"
+        game.completed && game.nextLevelUnlocked -> "下一课"
+        game.completed -> "关卡路线"
         game.hasCheckpoint && !game.completed -> "返回路标"
         else -> "重试"
     }
@@ -661,10 +661,14 @@ class VrGameBridge(context: Context) {
         val motionStudy = game.level.motionTopic != null
         val chapter = catalog.groups[catalog.groupForLevel(game.levelIndex)]
         val expedition = game.level.expedition
-        val hasNext = game.nextLevelIndex != null
+        val hasNext = game.nextLevelUnlocked
         val instruction = when {
-            game.completed -> if (hasNext) "本关完成。按 N 或在掌心选择「下一关」。"
-                else "「${chapter.title}」章节完成。按 N 查看关卡路线。"
+            game.completed -> when {
+                hasNext -> "本课完成。按 N 或在掌心选择「下一课」。"
+                catalog.isTutorial(game.levelIndex) && game.tutorialRouteComplete -> "教程主线完成。按 N 查看游玩支线。"
+                catalog.isTutorial(game.levelIndex) -> "本课完成。按 N 返回关卡路线。"
+                else -> "本关完成。按 N 返回关卡路线，选择新的挑战。"
+            }
             expedition != null -> game.missionInstruction ?: game.level.instruction
             geometryLesson || motionStudy -> game.observationInstruction ?: game.level.instruction
             else -> game.level.instruction
