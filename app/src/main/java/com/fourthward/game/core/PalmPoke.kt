@@ -2,8 +2,8 @@ package com.fourthward.game.core
 
 enum class PalmAction {
     RESET_ANGLE, TOGGLE_REFERENCE, CONTEXT, LEVEL_LIST, BACK,
-    /** Visible row slots; the current group maps them to absolute level indices. */
-    LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4, LEVEL_5, LEVEL_6,
+    /** Visible map slots; the viewport maps them to stable absolute level indices. */
+    LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4, LEVEL_5, LEVEL_6, LEVEL_7, LEVEL_8, LEVEL_9,
     PREVIOUS_GROUP, NEXT_GROUP,
 }
 
@@ -71,7 +71,8 @@ object PalmPanelLayout {
         NormalizedButtonRect(PalmAction.LEVEL_LIST, .52, .57, .96, .90),
     ))
     val levelActions = listOf(PalmAction.LEVEL_1, PalmAction.LEVEL_2, PalmAction.LEVEL_3,
-        PalmAction.LEVEL_4, PalmAction.LEVEL_5, PalmAction.LEVEL_6)
+        PalmAction.LEVEL_4, PalmAction.LEVEL_5, PalmAction.LEVEL_6,
+        PalmAction.LEVEL_7, PalmAction.LEVEL_8, PalmAction.LEVEL_9)
     val chapters = PalmPanelSpec(600, 460, .30, listOf(
         NormalizedButtonRect(PalmAction.LEVEL_1, .28, .19, .72, .40),
         NormalizedButtonRect(PalmAction.LEVEL_2, .04, .57, .48, .78),

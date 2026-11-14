@@ -122,6 +122,7 @@ class GameSession {
             }
             PalmAction.LEVEL_LIST, PalmAction.BACK, PalmAction.LEVEL_1,
             PalmAction.LEVEL_2, PalmAction.LEVEL_3, PalmAction.LEVEL_4, PalmAction.LEVEL_5, PalmAction.LEVEL_6,
+            PalmAction.LEVEL_7, PalmAction.LEVEL_8, PalmAction.LEVEL_9,
             PalmAction.PREVIOUS_GROUP, PalmAction.NEXT_GROUP -> return // Native OpenXR menu only.
         }
         publish()

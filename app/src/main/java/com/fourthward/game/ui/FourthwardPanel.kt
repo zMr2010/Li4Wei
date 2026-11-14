@@ -116,6 +116,9 @@ fun FourthwardPanel(state: PanelState, onAction: (PalmAction) -> Unit) {
                         PalmAction.LEVEL_4 -> "第四关"
                         PalmAction.LEVEL_5 -> "第五关"
                         PalmAction.LEVEL_6 -> "第六关"
+                        PalmAction.LEVEL_7 -> "第七关"
+                        PalmAction.LEVEL_8 -> "第八关"
+                        PalmAction.LEVEL_9 -> "第九关"
                         PalmAction.PREVIOUS_GROUP -> "上一组"
                         PalmAction.NEXT_GROUP -> "下一组"
                     },

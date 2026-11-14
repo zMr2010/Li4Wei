@@ -37,3 +37,9 @@
 - `MotionStudies` / `MotionLessonAnalogy`：正穿和斜穿超球的解析截面、倾斜立方盒与长盒的真实多面体求交，两侧共用四维中心运动的低维类比。只改变中心，不以动画缩放模拟截面。运动教程自由移动；辨认教程固定观察机制保留。
 - `MotionPuzzles` / `FourthwardGame.tickWorld`：引路球到路标等待、八秒周期漂游块和错峰开口；运动实体用固定大小和基底的平移扫掠体检测，接近玩家则停止时钟，路标保存/恢复位置、角度和运动时间。
 - 新增12段运动讲解沿用已确认Fish Audio音色与生成参数；原29段文本和音频不变，全部41段摘要校验。
+
+## 关卡依赖路线与界面细化
+
+- 用户提供的路线图仅作为依赖排列规则：前置纵向排列、独立路径并排；没有沿用其蓝底及红黄绿大色块。
+- 统一 `LevelDependencyGraph` 读取 `LevelProgress.requirementsForLevels`，只在绘图时约简冗余连接。全部十五关直接入图、三层视窗上下浏览；此前章节树和六格页面已由此替代，稳定 ID 和存档门槛保留。
+- 核对 ak-ui 版本 `ae5d2bd310844f9a75e3130c2055ea0f805caa86` 的 [card](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_ak-card.scss)、[button](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_ak-button.scss)、[tokens](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_tokens.scss)、[variables](https://github.com/YunYouJun/ak-ui/blob/master/src/scss/_variables.scss)：采用纸白/炭灰层级、暖黄色功能焦点、少量橙色标识、轻微切角、细边线与斜纹。绘制为原生 Canvas 图集及独立三维面片，未复制网页或游戏图像。

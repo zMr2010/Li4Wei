@@ -14,8 +14,9 @@ import kotlin.math.exp
 class VrGameBridge(context: Context) {
     private val levels = TutorialLevels.all()
     private val catalog = LevelCatalog(levels)
-    private var selectedGroupIndex = 0
-    private val selectedGroup get() = catalog.groups[selectedGroupIndex]
+    private val levelGraph = LevelDependencyGraph(levels)
+    private var mapFirstRow = 0
+    private val mapWindow get() = levelGraph.window(mapFirstRow)
     private val progressStore = LevelProgressStore(context)
     private val game = FourthwardGame(levels, progressStore.loadLevels(levels), progressStore::save)
     private val input = InputState()
@@ -28,7 +29,6 @@ class VrGameBridge(context: Context) {
     private var referenceVisible = true
     private var debugVisible = false
     private var levelListVisible = false
-    private var chapterMapVisible = true
     private var navigationRevision = 0L
     private var feedbackRevision = 0L
     private var effectsSceneRevision = 0L
@@ -116,8 +116,8 @@ class VrGameBridge(context: Context) {
             KeyEvent.KEYCODE_7, KeyEvent.KEYCODE_NUMPAD_7 -> InputKey.LEVEL_7
             KeyEvent.KEYCODE_8, KeyEvent.KEYCODE_NUMPAD_8 -> InputKey.LEVEL_8
             KeyEvent.KEYCODE_9, KeyEvent.KEYCODE_NUMPAD_9 -> InputKey.LEVEL_9
-            KeyEvent.KEYCODE_LEFT_BRACKET -> InputKey.PREVIOUS_GROUP
-            KeyEvent.KEYCODE_RIGHT_BRACKET -> InputKey.NEXT_GROUP
+            KeyEvent.KEYCODE_LEFT_BRACKET, KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_DPAD_DOWN -> InputKey.PREVIOUS_GROUP
+            KeyEvent.KEYCODE_RIGHT_BRACKET, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_DPAD_UP -> InputKey.NEXT_GROUP
             KeyEvent.KEYCODE_TAB -> InputKey.SELECT
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> InputKey.ACTIVATE
             else -> return false
@@ -255,19 +255,19 @@ class VrGameBridge(context: Context) {
             disabled = disabled,
             header = if (levelListVisible) null else activeLesson?.let { "讲解 ${it.stepIndex + 1} / ${it.stepCount} · 左指点击" },
             layout = layout,
-            levelItems = if (levelListVisible && !chapterMapVisible) selectedGroup.levelIndices.map { index ->
+            levelItems = if (levelListVisible) mapWindow.nodes.map { node ->
+                val index = node.index
                 VrLevelItem(index, levels[index].title, game.progress.isUnlocked(index), game.progress.isCompleted(index), index == game.levelIndex,
                     hasIntroduction = LessonTutorials.hasLesson(index), code = catalog.levelCode(index),
-                    lockedReason = if (selectedGroupIndex > 0 && !catalog.chapterComplete(0, game.progress)) "先完成「移动」章节" else "先完成上一关")
+                    lockedReason = lockedReason(index))
             } else emptyList(),
-            groupTitle = if (levelListVisible) if (chapterMapVisible) "章节地图" else selectedGroup.title else null,
-            chapterItems = if (levelListVisible && chapterMapVisible) catalog.groups.mapIndexed { index, chapter ->
-                VrChapterItem(index, chapter.title, chapter.levelIndices.count(game.progress::isCompleted),
-                    chapter.levelIndices.size, chapter.levelIndices.any(game.progress::isUnlocked),
-                    index == catalog.groupForLevel(game.levelIndex))
-            } else emptyList(),
-            completedCount = selectedGroup.levelIndices.count { game.progress.isCompleted(it) },
-            groupIndex = selectedGroupIndex, groupCount = catalog.groups.size)
+            groupTitle = if (levelListVisible) "关卡路线" else null,
+            completedCount = game.progress.completedCount,
+            map = if (levelListVisible) VrLevelMapState(
+                levelGraph.nodes.map { VrMapNode(it.index, it.row, it.column, game.progress.isCompleted(it.index), game.progress.isUnlocked(it.index), it.width) },
+                levelGraph.edges.map { VrMapEdge(it.fromIndex, it.toIndex) },
+                mapFirstRow, levelGraph.totalRows, game.progress.completedCount, levels.size,
+            ) else null)
         val voiceLabel = when (narration.status) {
             LessonNarration.Status.PLAYING -> "语音讲解中"
             LessonNarration.Status.PAUSED -> "语音已暂停"
@@ -304,17 +304,18 @@ class VrGameBridge(context: Context) {
     }
 
     private fun activePanelLayout(): PalmPanelSpec = when {
-        levelListVisible && chapterMapVisible -> PalmPanelLayout.chapters
-        levelListVisible -> PalmPanelLayout.chapterLevels(selectedGroup.levelIndices.size)
+        levelListVisible -> mapWindow.layout
         lesson != null -> PalmPanelLayout.lessonMenu
         else -> PalmPanelLayout.game
     }
 
     private fun disabledPanelActions(): Set<PalmAction> = if (levelListVisible) buildSet {
-        if (!chapterMapVisible) levelActions.forEachIndexed { row, action ->
-            val index = selectedGroup.levelAtRow(row)
+        levelActions.forEachIndexed { row, action ->
+            val index = mapWindow.nodes.getOrNull(row)?.index
             if (index == null || !game.progress.isUnlocked(index)) add(action)
         }
+        if (mapFirstRow == 0) add(PalmAction.PREVIOUS_GROUP)
+        if (mapFirstRow == levelGraph.maxFirstRow) add(PalmAction.NEXT_GROUP)
     } else lesson?.let { player -> buildSet {
         if (player.stepIndex == 0) add(PalmAction.RESET_ANGLE)
         if (player.isAnimating) add(PalmAction.CONTEXT)
@@ -328,45 +329,45 @@ class VrGameBridge(context: Context) {
     }
 
     private fun showLevelList(visible: Boolean, keyboard: Boolean = false) {
-        if (levelListVisible == visible && (!visible || chapterMapVisible)) return
+        if (levelListVisible == visible) return
         levelListVisible = visible
         if (keyboard) debugVisible = true
         if (visible) {
-            chapterMapVisible = true
-            selectedGroupIndex = catalog.groupForLevel(game.levelIndex)
+            mapFirstRow = (levelGraph.nodes.first { it.index == game.levelIndex }.row - 1)
+                .coerceIn(0, levelGraph.maxFirstRow)
         }
-        selectedControl = if (visible) selectedGroupIndex else if (lesson != null) 2 else 0
+        selectedControl = if (visible) mapWindow.nodes.indexOfFirst { it.index == game.levelIndex }.coerceAtLeast(0)
+            else if (lesson != null) 2 else 0
         resetNavigationPage()
         narration.setActive(focused && lesson != null && !visible)
-        Log.i(TAG, "chapter-map=$visible completedIds=${game.progress.completedIds}")
-        logState("chapter-map=$visible")
-    }
-
-    private fun openChapter(index: Int) {
-        if (!levelListVisible || index !in catalog.groups.indices) return
-        selectedGroupIndex = index
-        chapterMapVisible = false
-        selectedControl = selectedGroup.levelIndices.indexOfFirst { game.progress.isUnlocked(it) }
-            .takeIf { it >= 0 } ?: selectedGroup.levelIndices.size
-        resetNavigationPage()
-        Log.i(TAG, "chapter=${selectedGroup.id}")
+        Log.i(TAG, "level-map=$visible firstRow=$mapFirstRow slots=${mapWindow.nodes.map { catalog.levelCode(it.index) }} completedIds=${game.progress.completedIds}")
+        logState("level-map=$visible")
     }
 
     private fun backFromList() {
-        if (chapterMapVisible) showLevelList(false)
-        else showLevelList(true)
+        showLevelList(false)
     }
 
     private fun changeGroup(direction: Int) {
         if (!levelListVisible) return
-        if (chapterMapVisible) selectControl(direction)
-        else openChapter((selectedGroupIndex + direction).coerceIn(catalog.groups.indices))
+        val next = (mapFirstRow + direction).coerceIn(0, levelGraph.maxFirstRow)
+        if (next == mapFirstRow) return
+        mapFirstRow = next
+        val action = if (direction > 0) PalmAction.NEXT_GROUP else PalmAction.PREVIOUS_GROUP
+        selectedControl = mapWindow.layout.buttons.indexOfFirst { it.action == action }
+        resetNavigationPage()
+        Log.i(TAG, "map-row=$mapFirstRow slots=${mapWindow.nodes.map { catalog.levelCode(it.index) }}")
     }
 
     private fun chooseSlot(slot: Int) {
         if (!levelListVisible) return
-        if (chapterMapVisible) openChapter(slot)
-        else selectedGroup.levelAtRow(slot)?.let(::chooseLevel)
+        mapWindow.nodes.getOrNull(slot)?.index?.let(::chooseLevel)
+    }
+
+    private fun lockedReason(index: Int): String {
+        val missing = levelGraph.prerequisiteIndices(index).filterNot(game.progress::isCompleted)
+            .sortedBy { levelGraph.nodes.first { node -> node.index == it }.row }
+        return if (missing.isEmpty()) "可进入" else "需完成 " + missing.joinToString("、") { catalog.levelCode(it) }
     }
 
     private fun chooseLevel(index: Int) {
@@ -392,7 +393,7 @@ class VrGameBridge(context: Context) {
 
     private fun command(command: InputCommand) {
         when (command) {
-            InputCommand.TOGGLE_LEVEL_LIST -> { showLevelList(!levelListVisible || !chapterMapVisible, keyboard = true); return }
+            InputCommand.TOGGLE_LEVEL_LIST -> { showLevelList(!levelListVisible, keyboard = true); return }
             InputCommand.BACK -> {
                 if (levelListVisible) backFromList()
                 else if (debugVisible) { debugVisible = false; resetHands() }
@@ -404,9 +405,9 @@ class VrGameBridge(context: Context) {
             InputCommand.CHOOSE_LEVEL_4 -> { chooseSlot(3); return }
             InputCommand.CHOOSE_LEVEL_5 -> { chooseSlot(4); return }
             InputCommand.CHOOSE_LEVEL_6 -> { chooseSlot(5); return }
-            InputCommand.CHOOSE_LEVEL_7 -> return // Chapter pages contain at most six local slots.
-            InputCommand.CHOOSE_LEVEL_8 -> return // Chapter pages contain at most six local slots.
-            InputCommand.CHOOSE_LEVEL_9 -> return // Chapter pages contain at most six local slots.
+            InputCommand.CHOOSE_LEVEL_7 -> { chooseSlot(6); return }
+            InputCommand.CHOOSE_LEVEL_8 -> { chooseSlot(7); return }
+            InputCommand.CHOOSE_LEVEL_9 -> { chooseSlot(8); return }
             InputCommand.PREVIOUS_GROUP -> { changeGroup(-1); return }
             InputCommand.NEXT_GROUP -> { changeGroup(1); return }
             InputCommand.TOGGLE_DEBUG_PANEL -> {
@@ -662,7 +663,7 @@ class VrGameBridge(context: Context) {
         val hasNext = game.nextLevelIndex != null
         val instruction = when {
             game.completed -> if (hasNext) "本关完成。按 N 或在掌心选择「下一关」。"
-                else "「${chapter.title}」章节完成。按 N 查看章节地图。"
+                else "「${chapter.title}」章节完成。按 N 查看关卡路线。"
             expedition != null -> game.missionInstruction ?: game.level.instruction
             geometryLesson || motionStudy -> game.observationInstruction ?: game.level.instruction
             else -> game.level.instruction

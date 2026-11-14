@@ -197,7 +197,7 @@ class PalmPokeTest {
         assertEquals(PalmAction.LEVEL_3, tree.hitTest(.74, .67))
         assertNull(tree.hitTest(.5, .485)) // The connector is not an invisible button.
         val grid = PalmPanelLayout.chapterLevels(6)
-        assertEquals(PalmPanelLayout.levelActions + PalmAction.BACK, grid.buttons.map { it.action })
+        assertEquals(PalmPanelLayout.levelActions.take(6) + PalmAction.BACK, grid.buttons.map { it.action })
         assertEquals(PalmAction.LEVEL_6, grid.hitTest(.74, .70))
         assertEquals(PalmAction.BACK, grid.hitTest(.5, .9))
         assertEquals(4, PalmPanelLayout.chapterLevels(3).buttons.size)

@@ -53,4 +53,15 @@ class VrPanelStateTest {
         assertNull(tree.chapterItem(PalmAction.LEVEL_4))
         assertNull(tree.chapterItem(PalmAction.BACK))
     }
+    @Test fun nineVisibleSlotsRetainAbsoluteIdentityAcrossMapWindows() {
+        val indices = listOf(2, 6, 7, 8, 3, 9, 4, 10, 5)
+        val panel = VrPanelState(levelItems = indices.map { VrLevelItem(it, "Level $it", true, false, false) })
+        assertEquals(4, panel.levelItem(PalmAction.LEVEL_7)?.index)
+        assertEquals(10, panel.levelItem(PalmAction.LEVEL_8)?.index)
+        assertEquals(5, panel.levelItem(PalmAction.LEVEL_9)?.index)
+        assertNull(panel.levelItem(PalmAction.PREVIOUS_GROUP))
+        assertNull(panel.levelItem(PalmAction.BACK))
+        assertNull(panel.copy(levelItems = panel.levelItems.take(3)).levelItem(PalmAction.LEVEL_7))
+    }
+
 }

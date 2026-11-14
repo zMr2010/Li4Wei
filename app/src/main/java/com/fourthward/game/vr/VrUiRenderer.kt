@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.LinearGradient
+import android.graphics.Shader
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
@@ -11,6 +14,7 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
 import com.fourthward.game.core.PalmAction
+import com.fourthward.game.core.LevelMapWindow
 import com.fourthward.game.core.GeometryTopic
 import com.fourthward.game.core.MotionTopic
 import com.fourthward.game.core.PalmPanelLayout
@@ -54,17 +58,11 @@ data class VrPanelState(
     val referenceLabel: String = "参考平面",
     val referenceSelected: Boolean = referenceVisible,
     val chapterItems: List<VrChapterItem> = emptyList(),
+    val map: VrLevelMapState? = null,
 ) {
     /** Button actions identify visible rows, while each item retains its absolute level index. */
-    fun levelItem(action: PalmAction): VrLevelItem? = when (action) {
-        PalmAction.LEVEL_1 -> levelItems.getOrNull(0)
-        PalmAction.LEVEL_2 -> levelItems.getOrNull(1)
-        PalmAction.LEVEL_3 -> levelItems.getOrNull(2)
-        PalmAction.LEVEL_4 -> levelItems.getOrNull(3)
-        PalmAction.LEVEL_5 -> levelItems.getOrNull(4)
-        PalmAction.LEVEL_6 -> levelItems.getOrNull(5)
-        else -> null
-    }
+    fun levelItem(action: PalmAction): VrLevelItem? = PalmPanelLayout.levelActions.indexOf(action)
+        .takeIf { it >= 0 }?.let(levelItems::getOrNull)
     fun chapterItem(action: PalmAction): VrChapterItem? = PalmPanelLayout.levelActions.indexOf(action)
         .takeIf { it >= 0 }?.let(chapterItems::getOrNull)
 }
@@ -80,6 +78,45 @@ data class VrLevelItem(
     val code: String = (index + 1).toString(),
     val lockedReason: String = "先完成上一关",
 )
+
+data class VrMapNode(val index: Int, val row: Int, val column: Double, val completed: Boolean, val unlocked: Boolean, val width: Double = .27)
+data class VrMapEdge(val fromIndex: Int, val toIndex: Int)
+data class VrMapSegment(
+    val fromIndex: Int, val toIndex: Int, val x1: Double, val y1: Double, val x2: Double, val y2: Double,
+    val completed: Boolean, val available: Boolean,
+)
+
+/** Display geometry comes from the same dependency graph as progression, never from chapter order. */
+data class VrLevelMapState(
+    val nodes: List<VrMapNode>, val edges: List<VrMapEdge>, val firstRow: Int,
+    val totalRows: Int, val totalCompleted: Int, val totalLevels: Int,
+) {
+    fun centerY(row: Int): Double = LevelMapWindow.centerY(row, firstRow)
+
+    /** Orthogonal routes clipped at the viewport, before conversion to world-space quads. */
+    fun segments(): List<VrMapSegment> {
+        val byIndex = nodes.associateBy { it.index }
+        return edges.flatMap { edge ->
+            val from = byIndex[edge.fromIndex] ?: return@flatMap emptyList()
+            val to = byIndex[edge.toIndex] ?: return@flatMap emptyList()
+            val startY = centerY(from.row) - LevelMapWindow.NODE_HEIGHT / 2
+            val endY = centerY(to.row) + LevelMapWindow.NODE_HEIGHT / 2
+            val middle = (startY + endY) * .5
+            val points = if (abs(from.column - to.column) < .00001) listOf(from.column to startY, to.column to endY)
+                else listOf(from.column to startY, from.column to middle, to.column to middle, to.column to endY)
+            points.zipWithNext().mapNotNull { (a, b) ->
+                val (x1, y1) = a; val (x2, y2) = b
+                if (maxOf(y1, y2) < TOP || minOf(y1, y2) > BOTTOM) return@mapNotNull null
+                val clippedY1 = y1.coerceIn(TOP, BOTTOM); val clippedY2 = y2.coerceIn(TOP, BOTTOM)
+                if (abs(x1 - x2) < .00001 && abs(clippedY1 - clippedY2) < .00001) return@mapNotNull null
+                VrMapSegment(from.index, to.index, x1, clippedY1, x2, clippedY2,
+                    from.completed && to.completed, from.completed && to.unlocked)
+            }
+        }
+    }
+
+    companion object { const val TOP = .155; const val BOTTOM = .80 }
+}
 
 data class VrLessonStatus(
     val stepIndex: Int, val stepCount: Int, val title: String, val narration: String,
@@ -120,16 +157,38 @@ data class VrUiState(
     val feedbackRevision: Long = 0L,
 )
 
+internal data class VrAtlasRegion(val x: Int, val y: Int, val width: Int, val height: Int)
+private typealias Region = VrAtlasRegion
+
+/** Explicit atlas allocations keep a larger route window from colliding with captions or pointer art. */
+internal object VrUiAtlas {
+    val angle = Region(0, 0, 300, 72)
+    val comparisons = listOf(Region(320, 0, 340, 72), Region(670, 0, 340, 72))
+    val tutorial = Region(0, 80, 640, 184)
+    val panel = Region(0, 280, 600, 460)
+    val buttons = List(12) { Region(620 + (it % 4) * 350, 280 + (it / 4) * 150, 340, 140) }
+    val pointer = Region(1500, 0, 64, 64)
+    val lesson = Region(0, 768, 900, 240)
+    val yellow = Region(1050, 0, 8, 8)
+    val white = Region(1064, 0, 8, 8)
+    val mint = Region(1078, 0, 8, 8)
+    val base = Region(1050, 16, 8, 8)
+    val bevel = Region(1064, 16, 8, 8)
+    val scan = Region(1100, 0, 128, 16)
+    val glow = Region(1240, 0, 96, 96)
+    val mintGlow = Region(1340, 0, 96, 96)
+    val all = listOf(angle, tutorial, panel, pointer, lesson, yellow, white, mint, base, bevel, scan, glow, mintGlow) + comparisons + buttons
+}
+
 /** One cached Android atlas, separate real 3D button quads, no Spatial SDK dependency. */
 class VrUiRenderer {
-    private data class Region(val x: Int, val y: Int, val width: Int, val height: Int)
-    private val angleRegion = Region(0, 0, 300, 72)
-    private val comparisonRegions = listOf(Region(320, 0, 340, 72), Region(670, 0, 340, 72))
-    private val tutorialRegion = Region(0, 80, 640, 184)
-    private val panelRegion = Region(0, 280, 600, 460)
-    private val buttonRegions = List(7) { Region(620 + (it % 2) * 600, 280 + (it / 2) * 110, 580, 100) }
-    private val pointerRegion = Region(1840, 280, 64, 64)
-    private val lessonRegion = Region(0, 768, 900, 240)
+    private val angleRegion = VrUiAtlas.angle
+    private val comparisonRegions = VrUiAtlas.comparisons
+    private val tutorialRegion = VrUiAtlas.tutorial
+    private val panelRegion = VrUiAtlas.panel
+    private val buttonRegions = VrUiAtlas.buttons
+    private val pointerRegion = VrUiAtlas.pointer
+    private val lessonRegion = VrUiAtlas.lesson
     private val motion = UiMotionState()
     private val buttonMotion = mutableMapOf<PalmAction, UiButtonMotion>()
     private var focusMotion = UiFocusMotion()
@@ -147,20 +206,20 @@ class VrUiRenderer {
     private var captionAt = 0.0
     private var completionKey: Any? = null
     private var completedAt = Double.NEGATIVE_INFINITY
-    private val yellowRegion = Region(1050, 0, 8, 8)
-    private val whiteRegion = Region(1064, 0, 8, 8)
-    private val mintRegion = Region(1078, 0, 8, 8)
-    private val baseRegion = Region(1050, 16, 8, 8)
-    private val bevelRegion = Region(1064, 16, 8, 8)
-    private val scanRegion = Region(1100, 0, 128, 16)
-    private val glowRegion = Region(1240, 0, 96, 96)
-    private val mintGlowRegion = Region(1340, 0, 96, 96)
+    private val yellowRegion = VrUiAtlas.yellow
+    private val whiteRegion = VrUiAtlas.white
+    private val mintRegion = VrUiAtlas.mint
+    private val baseRegion = VrUiAtlas.base
+    private val bevelRegion = VrUiAtlas.bevel
+    private val scanRegion = VrUiAtlas.scan
+    private val glowRegion = VrUiAtlas.glow
+    private val mintGlowRegion = VrUiAtlas.mintGlow
 
     /** Gate hand contacts only; debug keyboard commands can interrupt any transition. */
     fun interactionReady(pageRevision: Long): Boolean = pageRevision == desiredPageRevision && motion.interactionReady(desiredPageKey)
 
     private fun pageKey(state: VrUiState): String = listOf(state.pageRevision, state.panel.layout,
-        state.panel.groupTitle, state.panel.groupIndex).joinToString("|")
+        state.panel.groupTitle, state.panel.groupIndex, state.panel.map?.firstRow).joinToString("|")
 
     fun render(state: VrUiState, nowNanos: Long): VrRenderFrame {
         desiredPageKey = pageKey(state)
@@ -373,35 +432,47 @@ class VrUiRenderer {
                     (focus[3] - focus[1]) * height + .003 * scale, .006 * scale,
                     opacity * focus[4] * .9)
             }
-            if (panel.chapterItems.isNotEmpty()) {
-                val connected = panel.chapterItems.first().completed
-                val tint = if (connected) yellowRegion else whiteRegion
-                val pathAlpha = opacity * if (connected) .75 else .20
-                fun treeLine(x1: Double, y1: Double, x2: Double, y2: Double, progress: Double) {
-                    val t = progress.coerceIn(0.0, 1.0)
-                    line(panelPose, (x1 - .5) * width, (.5 - y1) * height,
-                        (x1 + (x2 - x1) * t - .5) * width, (.5 - y1 - (y2 - y1) * t) * height,
-                        .00065 * scale, tint, pathAlpha)
-                }
-                val p = movement.branchProgress
-                treeLine(.5, .40, .5, .485, p * 3)
-                for (side in listOf(.26, .74)) {
-                    treeLine(.5, .485, side, .485, p * 3 - 1)
-                    treeLine(side, .485, side, .57, p * 3 - 2)
-                    val dotAlpha = UiMotionTokens.smooth((p - .60) / .40)
-                    add(tint, offset(panelPose, (side - .5) * width, (.5 - .485) * height, .0004),
-                        .0016 * scale, .0016 * scale, true, pathAlpha * dotAlpha)
-                }
-                if (connected && p > .995) {
-                    // One restrained signal crosses each branch; the nodes themselves remain stationary.
-                    val travel = ((time - .76) % 3.2).coerceAtLeast(0.0) / 3.2
-                    if (travel < .65) for (side in listOf(.26, .74)) {
-                        val q = travel / .65 * 3
-                        val x = when { q < 1 -> .5; q < 2 -> .5 + (side - .5) * (q - 1); else -> side }
-                        val y = when { q < 1 -> .40 + .085 * q; q < 2 -> .485; else -> .485 + .085 * (q - 2) }
-                        add(glowRegion, offset(panelPose, (x - .5) * width, (.5 - y) * height, .0005),
-                            .010 * scale, .010 * scale, true, opacity * .32)
+            panel.map?.let { map ->
+                val segments = map.segments()
+                segments.forEachIndexed { index, segment ->
+                    val progress = UiMotionTokens.out((movement.entryAge - .10 - index * .012) / .38)
+                    val tint = when { segment.completed -> mintRegion; segment.available -> yellowRegion; else -> whiteRegion }
+                    val strength = opacity * when { segment.completed -> .62; segment.available -> .85; else -> .20 }
+                    fun route(a: Double, b: Double) {
+                        val x1 = segment.x1 + (segment.x2 - segment.x1) * a
+                        val y1 = segment.y1 + (segment.y2 - segment.y1) * a
+                        val x2 = segment.x1 + (segment.x2 - segment.x1) * b
+                        val y2 = segment.y1 + (segment.y2 - segment.y1) * b
+                        line(panelPose, (x1 - .5) * width, (.5 - y1) * height,
+                            (x2 - .5) * width, (.5 - y2) * height, .00055 * scale, tint, strength)
                     }
+                    if (segment.completed || segment.available) route(0.0, progress)
+                    else {
+                        val length = kotlin.math.sqrt(((segment.x2 - segment.x1) * width).let { it * it } +
+                            ((segment.y2 - segment.y1) * height).let { it * it })
+                        val count = maxOf(1, (length / (.004 * scale)).toInt())
+                        repeat(count) { dash ->
+                            val start = dash.toDouble() / count
+                            val end = minOf((dash + .48) / count, progress)
+                            if (end > start) route(start, end)
+                        }
+                    }
+                    if (progress > .99) {
+                        // Tiny square junctions give the wiring a deliberate mechanical termination.
+                        add(tint, offset(panelPose, (segment.x2 - .5) * width, (.5 - segment.y2) * height, .0005),
+                            .0012 * scale, .0012 * scale, true, strength)
+                    }
+                }
+                // At clipped routes the chevron indicates which direction continues beyond the window.
+                segments.filter { it.y1 == VrLevelMapState.BOTTOM || it.y2 == VrLevelMapState.TOP }.forEach { segment ->
+                    val x = if (segment.y2 == VrLevelMapState.TOP) segment.x2 else segment.x1
+                    val y = if (segment.y2 == VrLevelMapState.TOP) VrLevelMapState.TOP + .008 else VrLevelMapState.BOTTOM - .008
+                    val tint = if (segment.available) yellowRegion else whiteRegion
+                    val a = opacity * movement.branchProgress * .55
+                    line(panelPose, (x - .5 - .006) * width, (.5 - y - .006) * height,
+                        (x - .5) * width, (.5 - y) * height, .0005 * scale, tint, a)
+                    line(panelPose, (x - .5 + .006) * width, (.5 - y - .006) * height,
+                        (x - .5) * width, (.5 - y) * height, .0005 * scale, tint, a)
                 }
             }
             validPointer(panel)?.let { pointer ->
@@ -426,7 +497,7 @@ class VrUiRenderer {
         inRegion(c, scanRegion) {
             val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = android.graphics.LinearGradient(0f, 0f, 128f, 0f,
-                    intArrayOf(Color.TRANSPARENT, Color.argb(180, 255, 250, 0), Color.TRANSPARENT),
+                    intArrayOf(Color.TRANSPARENT, Ink.alpha(Ink.signal, 150), Color.TRANSPARENT),
                     floatArrayOf(0f, .5f, 1f), android.graphics.Shader.TileMode.CLAMP)
             }
             val band = android.graphics.Path().apply {
@@ -534,8 +605,47 @@ class VrUiRenderer {
             distance > .35 -> "左指距面板 $cm cm"
             else -> "左指 · ${if (valid.depthMeters >= 0) "前" else "后"} $cm cm"
         }
-        if (state.chapterItems.isNotEmpty()) {
-            Ink.text(c, "章节地图", 20f, 34f, Ink.paint(28f, bold = true))
+        if (state.map != null) {
+            val map = state.map
+            c.save(); c.clipPath(Ink.cutShape(width, height, 9f))
+            c.drawRect(0f, 0f, width, 44f, Paint().apply { color = Ink.ivory })
+            c.drawRect(0f, 0f, 5f, 44f, Paint().apply { color = Ink.orange })
+            c.restore()
+            Ink.text(c, "关卡路线", 22f, 33f, Ink.paint(27f, Ink.black, true))
+            Ink.text(c, "LI4WEI / ROUTE", 158f, 32f, Ink.paint(10f, Ink.alpha(Ink.black, 160), mono = true))
+            val counter = String.format(Locale.ROOT, "%02d / %02d", map.totalCompleted, map.totalLevels)
+            Ink.text(c, counter, width - 107f, 31f, Ink.paint(20f, Ink.black, true, true))
+            Ink.line(c, 22f, 44f, width - 22f, Ink.alpha(Ink.ivory, 48))
+            Ink.text(c, "沿线向上探索", 22f, 64f, Ink.paint(13f, Ink.dim))
+            listOf(Triple(314f, "已通过", 2), Triple(402f, "已解锁", 1), Triple(490f, "未解锁", 0)).forEach { (x, label, status) ->
+                val tint = when (status) { 2 -> Ink.success; 1 -> Ink.signal; else -> Ink.dim }
+                Ink.status(c, x, 58f, 9f, status, tint)
+                Ink.text(c, label, x + 14f, 62f, Ink.paint(12f, tint))
+            }
+            // A slim overview rail preserves orientation without shrinking every level to an unreadable dot.
+            val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ink.alpha(Ink.ivory, 35); strokeWidth = 1f }
+            c.drawLine(width - 17f, 81f, width - 17f, 356f, rail)
+            val rows = map.totalRows.coerceAtLeast(3)
+            val step = 275f / rows
+            val bottom = 356f - map.firstRow * step
+            c.drawRect(width - 19f, bottom - 3 * step, width - 15f, bottom,
+                Paint().apply { color = Ink.signal })
+            map.nodes.map { it.row }.distinct().forEach { row ->
+                val y = 356f - (row + .5f) * step
+                c.drawLine(width - 24f, y, width - 21f, y, rail)
+            }
+            val selected = state.hoveredAction?.let(state::levelItem)
+            val detail = selected?.let {
+                when { !it.unlocked -> "${it.code}  ${it.lockedReason}"
+                    it.completed -> "${it.code}  已通过 · 可再次进入"
+                    else -> "${it.code}  ${if (it.hasIntroduction) "立体讲解 · 实际探索" else "进入挑战"}" }
+            } ?: "选择关卡，继续探索"
+            Ink.text(c, detail, 22f, 378f, Ink.paint(12.5f, if (selected?.unlocked == false) Ink.dim else Ink.ivory), width - 44f)
+            Ink.line(c, 22f, 385f, width - 22f, Ink.alpha(Ink.ivory, 38))
+            Ink.text(c, if (state.debugMode) "1–${state.levelItems.size} 选择 · Tab / Enter 确认 · ↑↓ 浏览 · Esc 返回" else pointerHint,
+                22f, height - 8f, Ink.paint(11f, Ink.dim), width - 44f)
+        } else if (state.chapterItems.isNotEmpty()) {
+            Ink.text(c, "关卡路线", 20f, 34f, Ink.paint(28f, bold = true))
             Ink.text(c, "先探索移动，再选择新的方向", 20f, 60f, Ink.paint(17f, Ink.dim))
             Ink.text(c, if (state.debugMode) "1–3 查看章节 · Esc 返回 · Tab / Enter 选择" else pointerHint,
                 20f, height - 8f, Ink.paint(16f, Ink.dim), width - 40f)
@@ -545,14 +655,14 @@ class VrUiRenderer {
             val countPaint = Ink.paint(17f, Ink.signal)
             Ink.text(c, countText, width - countPaint.measureText(countText) - 20f, 33f, countPaint)
             Ink.text(c, "教程建立直觉 · 挑战运用理解", 20f, 60f, Ink.paint(17f, Ink.dim), width - 40f)
-            Ink.text(c, if (state.debugMode) "1–${state.levelItems.size} 选关 · Esc 章节地图 · Tab / Enter 选择" else pointerHint,
+            Ink.text(c, if (state.debugMode) "1–${state.levelItems.size} 选关 · Esc 关卡路线 · Tab / Enter 选择" else pointerHint,
                 20f, height - 8f, Ink.paint(16f, Ink.dim), width - 40f)
         } else {
             val text = if (state.debugMode) "Tab 选择 · Enter 点击 · M 收起" else pointerHint
             val p = Ink.paint(if (state.debugMode) 20f else 22f)
             Ink.text(c, text, 16f, 32f, p, width - 32f)
             if (state.layout == PalmPanelLayout.game) {
-                Ink.text(c, "L 章节地图", 16f, height - 9f, Ink.paint(16f, Ink.dim), width - 32f)
+                Ink.text(c, "L 关卡路线", 16f, height - 9f, Ink.paint(16f, Ink.dim), width - 32f)
             }
         }
     }
@@ -564,15 +674,44 @@ class VrUiRenderer {
         val pressed = !disabled && state.pressedAction == action
         val active = !disabled && (state.hoveredAction == action ||
             (state.labels == null && action == PalmAction.TOGGLE_REFERENCE && state.referenceSelected))
-        val rect = RectF(1f, 1f, width - 1f, height - 1f)
-        c.drawRoundRect(rect, 6f, 6f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (pressed) Ink.signal else if (disabled) Color.argb(215, 32, 34, 34) else Color.argb(240, 25, 25, 25)
-        })
-        c.drawRoundRect(rect, 6f, 6f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (active || pressed) Ink.signal else if (disabled) Color.rgb(79, 84, 83) else Ink.dim
-            style = Paint.Style.STROKE; strokeWidth = if (active) 2.5f else 1.2f
-        })
-        val foreground = if (disabled) Color.rgb(130, 136, 134) else if (pressed) Ink.black else Ink.ivory
+        val light = active && !disabled && item != null
+        val fill = when { pressed -> Ink.signal; disabled -> Color.rgb(33, 36, 38); light -> Ink.ivory; else -> Color.rgb(42, 45, 47) }
+        val foreground = when { disabled -> Color.rgb(139, 145, 146); pressed || light -> Ink.black; else -> Ink.ivory }
+        val accent = when { pressed -> Ink.black; item?.completed == true -> if (light) Ink.deepSuccess else Ink.success
+            disabled -> Ink.dim; else -> Ink.signal }
+        Ink.button(c, width, height, fill, if (active || pressed) Ink.signal else Ink.alpha(Ink.ivory, if (disabled) 42 else 100),
+            foreground, active, disabled)
+        if (state.map != null && item != null) {
+            // Paper metadata band over a charcoal body: hierarchy stays legible without color flooding.
+            c.save(); c.clipPath(Ink.cutShape(width, height, 5f))
+            c.drawRect(1f, 1f, width - 1f, 25f, Paint().apply { color = if (disabled) Color.rgb(56, 61, 63) else Ink.ivory })
+            c.drawRect(1f, 1f, 4f, 25f, Paint().apply { color = if (disabled) Ink.dim else if (item.current) Ink.orange else Ink.signal })
+            c.restore()
+            val metaColor = if (disabled) foreground else Ink.black
+            Ink.text(c, item.code, 11f, 19f, Ink.paint(16f, metaColor, true, true), 42f)
+            val chapterLabel = when (item.code.substringBefore('-')) { "1" -> "移动"; "2" -> "辨认"; "3" -> "运动"; else -> "" }
+            Ink.text(c, chapterLabel, 58f, 19f, Ink.paint(10f, Ink.alpha(metaColor, 170)), width - 90f)
+            Ink.status(c, width - 17f, 13f, 10f, if (item.completed) 2 else if (item.unlocked) 1 else 0,
+                if (item.completed) Ink.deepSuccess else metaColor)
+            val title = item.title.substringAfter(" · ", item.title)
+            val titlePaint = Ink.paint(if (width >= 200f) 21f else 18f, foreground, true)
+            if (titlePaint.measureText(title) <= width - 22f) {
+                Ink.text(c, title, 11f, 48f, titlePaint, width - 22f)
+            } else {
+                val wrapPaint = Ink.paint(18f, foreground, true)
+                val split = wrapPaint.breakText(title, true, width - 22f, null).coerceAtLeast(1)
+                Ink.text(c, title.take(split), 11f, 42f, wrapPaint, width - 22f)
+                Ink.text(c, title.drop(split), 11f, 61f, wrapPaint, width - 22f)
+            }
+            c.drawRect(1f, height - 3f, if (item.current) width * .54f else width * .22f, height - 1f,
+                Paint().apply { color = if (item.current) Ink.orange else Ink.alpha(accent, 180) })
+            if (state.debugMode) {
+                val slot = PalmPanelLayout.levelActions.indexOf(action) + 1
+                Ink.text(c, slot.toString(), width - 13f, height - 6f, Ink.paint(8f,
+                    if (pressed || light) Ink.alpha(Ink.black, 130) else Ink.alpha(Ink.ivory, 110), mono = true))
+            }
+            return
+        }
         if (chapter != null) {
             val accent = if (pressed) Ink.black else if (chapter.completed) Ink.success else if (chapter.unlocked) Ink.signal else Ink.dim
             Ink.text(c, "0${chapter.index + 1}  ${chapter.title}", 14f, 31f, Ink.paint(27f, foreground, true), width - 28f)
@@ -607,19 +746,27 @@ class VrUiRenderer {
             PalmAction.RESET_ANGLE -> "θ归零"
             PalmAction.TOGGLE_REFERENCE -> state.referenceLabel
             PalmAction.CONTEXT -> state.contextLabel
-            PalmAction.LEVEL_LIST -> "章节地图"
-            PalmAction.BACK -> if (state.levelItems.isNotEmpty()) "章节地图" else "返回"
+            PalmAction.LEVEL_LIST -> "关卡路线"
+            PalmAction.BACK -> "返回"
             PalmAction.LEVEL_1 -> "第一关"
             PalmAction.LEVEL_2 -> "第二关"
             PalmAction.LEVEL_3 -> "第三关"
             PalmAction.LEVEL_4 -> "第四关"
             PalmAction.LEVEL_5 -> "第五关"
             PalmAction.LEVEL_6 -> "第六关"
-            PalmAction.PREVIOUS_GROUP -> "‹"
-            PalmAction.NEXT_GROUP -> "›"
+            PalmAction.LEVEL_7 -> "第七关"
+            PalmAction.LEVEL_8 -> "第八关"
+            PalmAction.LEVEL_9 -> "第九关"
+            PalmAction.PREVIOUS_GROUP -> if (state.map != null) "前序" else "‹"
+            PalmAction.NEXT_GROUP -> if (state.map != null) "后续" else "›"
         }
-        val p = Ink.paint(if (width < 140f) 25f else 27f, foreground, true)
-        Ink.text(c, label, maxOf(6f, (width - p.measureText(label)) / 2), (height - p.ascent() - p.descent()) / 2, p, width - 12f)
+        val p = Ink.paint(if (state.map != null) 18f else if (width < 140f) 25f else 27f, foreground, true)
+        val labelX = maxOf(6f, (width - p.measureText(label)) / 2)
+        Ink.text(c, label, labelX, (height - p.ascent() - p.descent()) / 2, p, width - 12f)
+        if (state.map != null && action in listOf(PalmAction.PREVIOUS_GROUP, PalmAction.NEXT_GROUP)) {
+            val sign = if (action == PalmAction.NEXT_GROUP) -1f else 1f
+            Ink.chevron(c, labelX - 13f, height / 2, 4f, sign, foreground)
+        }
     }
 
     private fun validPointer(state: VrPanelState) = state.pointer?.takeIf {
@@ -640,17 +787,71 @@ class VrUiRenderer {
 }
 
 private object Ink {
-    val ivory = Color.rgb(242, 242, 240)
-    val signal = Color.rgb(255, 250, 0)
-    val success = Color.rgb(154, 227, 177)
-    val black = Color.rgb(25, 25, 25)
-    val dim = Color.rgb(177, 181, 179)
+    val ivory = Color.rgb(244, 244, 239)
+    val signal = Color.rgb(241, 198, 68)
+    val orange = Color.rgb(246, 84, 14)
+    val success = Color.rgb(157, 214, 188)
+    val deepSuccess = Color.rgb(41, 101, 80)
+    val black = Color.rgb(27, 29, 31)
+    val dim = Color.rgb(176, 184, 186)
+    fun alpha(color: Int, alpha: Int): Int = Color.argb(alpha.coerceIn(0, 255), Color.red(color), Color.green(color), Color.blue(color))
+    fun cutShape(width: Float, height: Float, cut: Float = 6f): Path = Path().apply {
+        moveTo(cut, .5f); lineTo(width - .5f, .5f); lineTo(width - .5f, height - cut)
+        lineTo(width - cut, height - .5f); lineTo(.5f, height - .5f); lineTo(.5f, cut); close()
+    }
     fun card(c: Canvas, width: Float, height: Float, alpha: Int = 210) {
-        val rect = RectF(.5f, .5f, width - .5f, height - .5f)
-        c.drawRoundRect(rect, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(alpha, 25, 25, 25) })
-        c.drawRoundRect(rect, 12f, 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(80, 242, 242, 240); style = Paint.Style.STROKE; strokeWidth = 1f
+        val shape = cutShape(width, height, if (width >= 400) 9f else 5f)
+        c.drawPath(shape, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(0f, 0f, width * .75f, height,
+                intArrayOf(Color.argb(alpha, 43, 49, 52), Color.argb(alpha, 20, 24, 27)), null, Shader.TileMode.CLAMP)
         })
+        c.drawPath(shape, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(90, 224, 231, 229); style = Paint.Style.STROKE; strokeWidth = 1f
+        })
+        c.drawLine(12f, 1.5f, width * .55f, 1.5f, Paint().apply { color = Color.argb(85, 255, 255, 248); strokeWidth = 1f })
+        c.drawLine(width - 13f, height - 1.5f, width - 2f, height - 12.5f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ink.alpha(signal, 120); strokeWidth = 1f })
+    }
+    fun button(c: Canvas, width: Float, height: Float, fill: Int, border: Int,
+               foreground: Int, active: Boolean, disabled: Boolean) {
+        val shape = cutShape(width, height, 5f)
+        c.drawPath(shape, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(0f, 0f, width, height,
+                intArrayOf(fill, Color.rgb((Color.red(fill) * .89).toInt(), (Color.green(fill) * .89).toInt(), (Color.blue(fill) * .89).toInt())),
+                null, Shader.TileMode.CLAMP)
+        })
+        c.save(); c.clipPath(shape)
+        val stripe = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = alpha(foreground, if (disabled) 7 else 12); strokeWidth = 1f }
+        for (i in 0..6) {
+            val x = width - 36f + i * 8f
+            c.drawLine(x, height, x + 18f, height - 18f, stripe)
+        }
+        c.drawLine(5f, 2f, width - 2f, 2f, Paint().apply { color = alpha(foreground, 65); strokeWidth = 1f })
+        c.restore()
+        c.drawPath(shape, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = border; style = Paint.Style.STROKE; strokeWidth = if (active) 1.8f else .8f
+        })
+    }
+    /** Small vector symbols remain crisp in the atlas and do not depend on emoji fonts. */
+    fun status(c: Canvas, x: Float, y: Float, size: Float, state: Int, color: Int) {
+        val r = size * .5f
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.STROKE; strokeWidth = 1.4f; strokeJoin = Paint.Join.MITER }
+        when (state) {
+            2 -> {
+                c.drawRect(x - r, y - r, x + r, y + r, p)
+                c.drawPath(Path().apply { moveTo(x - r * .6f, y); lineTo(x - r * .05f, y + r * .5f); lineTo(x + r * .7f, y - r * .6f) }, p)
+            }
+            1 -> c.drawPath(Path().apply { moveTo(x, y - r); lineTo(x + r, y); lineTo(x, y + r); lineTo(x - r, y); close() }, p)
+            else -> {
+                c.drawRect(x - r * .8f, y - r * .05f, x + r * .8f, y + r, p)
+                c.drawArc(RectF(x - r * .55f, y - r, x + r * .55f, y + r * .6f), 180f, 180f, false, p)
+                c.drawLine(x, y + r * .25f, x, y + r * .65f, p)
+            }
+        }
+    }
+    fun chevron(c: Canvas, x: Float, y: Float, size: Float, direction: Float, color: Int) {
+        c.drawPath(Path().apply { moveTo(x - size, y - direction * size * .4f); lineTo(x, y + direction * size * .6f); lineTo(x + size, y - direction * size * .4f) },
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.STROKE; strokeWidth = 1.5f })
     }
     fun paint(size: Float, color: Int = ivory, bold: Boolean = false, mono: Boolean = false) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = size; this.color = color

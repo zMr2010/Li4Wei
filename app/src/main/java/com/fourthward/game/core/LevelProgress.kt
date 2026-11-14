@@ -38,16 +38,19 @@ class LevelProgress(
     fun recordCompletion(index: Int): Boolean = isUnlocked(index) && cleared.add(orderedIds[index])
 
     companion object {
-        fun forLevels(levels: List<TutorialLevel>, completedIds: Set<String> = emptySet()): LevelProgress {
+        /** Shared by progression and its map. Display edges may omit transitive requirements. */
+        fun requirementsForLevels(levels: List<TutorialLevel>): Map<String, Set<String>> {
             val groups = levels.groupBy { it.groupId }
             val movement = groups["movement"].orEmpty().map { it.id }.toSet()
-            val requirements = groups.flatMap { (group, entries) ->
+            return groups.flatMap { (group, entries) ->
                 entries.mapIndexed { index, level ->
                     val chapterGate = if (group in setOf("recognition", "motion")) movement else emptySet()
                     level.id to (chapterGate + if (index > 0) setOf(entries[index - 1].id) else emptySet())
                 }
             }.toMap()
-            return LevelProgress(levels.map { it.id }, completedIds, requirements)
         }
+
+        fun forLevels(levels: List<TutorialLevel>, completedIds: Set<String> = emptySet()): LevelProgress =
+            LevelProgress(levels.map { it.id }, completedIds, requirementsForLevels(levels))
     }
 }
