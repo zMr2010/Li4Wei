@@ -30,6 +30,14 @@ internal object VrTrackingMath {
         return unit(Vec3(head.right.x, 0.0, head.right.z))
     }
 
+    /** Head-relative ground movement; pitch/roll never introduce vertical travel or slow walking.
+     * The returned coordinates belong to the current 3D slice. SliceFrame alone applies theta. */
+    fun locomotion(head: Pose, rightMeters: Double, forwardMeters: Double, upMeters: Double = 0.0): Vec3 {
+        val right = horizontalRight(head) ?: return Vec3(0.0, upMeters, 0.0)
+        val forward = Vec3(right.z, 0.0, -right.x)
+        return right * rightMeters + forward * forwardMeters + Vec3(0.0, upMeters, 0.0)
+    }
+
     /** XR_HAND_JOINT_*_EXT order,26 positions. Invalid/missing hands must arrive as null. */
     fun hand(sample: FloatArray?, isLeft: Boolean): HandLandmarks? {
         if (sample == null || sample.size < 78 || (0 until 78).any { !sample[it].isFinite() }) return null

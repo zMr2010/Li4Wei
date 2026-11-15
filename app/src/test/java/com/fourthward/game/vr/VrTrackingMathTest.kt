@@ -12,6 +12,54 @@ class VrTrackingMathTest {
         assertEquals(expected.x, actual.x, epsilon); assertEquals(expected.y, actual.y, epsilon); assertEquals(expected.z, actual.z, epsilon)
     }
 
+    private fun facing(yaw: Double, pitch: Double = 0.0, roll: Double = 0.0): VrTrackingMath.Pose {
+        fun multiply(a: DoubleArray, b: DoubleArray): DoubleArray {
+            val av = Vec3(a[0], a[1], a[2]); val bv = Vec3(b[0], b[1], b[2])
+            val v = bv * a[3] + av * b[3] + av.cross(bv)
+            return doubleArrayOf(v.x, v.y, v.z, a[3] * b[3] - av.dot(bv))
+        }
+        val q = multiply(multiply(doubleArrayOf(0.0, sin(yaw / 2), 0.0, cos(yaw / 2)),
+            doubleArrayOf(sin(pitch / 2), 0.0, 0.0, cos(pitch / 2))),
+            doubleArrayOf(0.0, 0.0, sin(roll / 2), cos(roll / 2)))
+        return VrTrackingMath.head(floatArrayOf(0f, 1.65f, 0f, q[0].toFloat(), q[1].toFloat(), q[2].toFloat(), q[3].toFloat()))!!
+    }
+
+    @Test fun wasdFollowsHorizontalViewAtEveryCardinalHeadingWithoutPitchOrRollDrift() {
+        for (yaw in listOf(0.0, PI / 2, PI, -PI / 2)) {
+            val right = Vec3(cos(yaw), 0.0, -sin(yaw))
+            val forward = Vec3(-sin(yaw), 0.0, -cos(yaw))
+            for (pitch in listOf(-PI / 3, 0.0, PI / 3)) for (roll in listOf(0.0, PI / 4)) {
+                val head = facing(yaw, pitch, roll)
+                assertVector(forward, VrTrackingMath.locomotion(head, 0.0, 1.0))
+                assertVector(forward * -1.0, VrTrackingMath.locomotion(head, 0.0, -1.0))
+                assertVector(right, VrTrackingMath.locomotion(head, 1.0, 0.0))
+                assertVector(right * -1.0, VrTrackingMath.locomotion(head, -1.0, 0.0))
+                assertVector(Vec3(0.0, .5, 0.0), VrTrackingMath.locomotion(head, 0.0, 0.0, .5))
+            }
+            for (pitch in listOf(-PI / 2, PI / 2)) {
+                assertVector(forward, VrTrackingMath.locomotion(facing(yaw, pitch), 0.0, 1.0))
+            }
+        }
+    }
+
+    @Test fun heldForwardUpdatesWithHeadTurnAndSliceAngleIsAppliedOnlyOnce() {
+        val input = InputState().apply { setEnabled(true); key(InputKey.FORWARD, true) }
+        val first = input.frame(.05, 0)
+        assertVector(Vec3(0.0, 0.0, -.075), VrTrackingMath.locomotion(facing(0.0), first.moveRightMeters, first.moveForwardMeters))
+        val next = input.frame(.05, 1)
+        val movement = VrTrackingMath.locomotion(facing(PI / 2), next.moveRightMeters, next.moveForwardMeters)
+        assertVector(Vec3(-.075, 0.0, 0.0), movement)
+        val game = FourthwardGame()
+        game.updateTrackedHead(Vec3(0.0, 1.65, 0.0))
+        game.rotate(PI / 2)
+        game.move(movement)
+        val feet = game.playerFootWorld()
+        assertEquals(0.0, feet.x, 1e-7)
+        assertEquals(-.075, feet.y, 1e-7)
+        assertEquals(0.0, feet.w, 1e-7)
+        assertEquals(90.0, game.rotationDegrees, 1e-9)
+    }
+
     @Test fun headTranslationIsUnboundedAndQuaternionIsXyzwWithoutChangingTheGameAngle() {
         val pose = VrTrackingMath.head(floatArrayOf(4.3f, 1.7f, -5.2f, 0f, 0f, 0f, 1f))!!
         assertVector(Vec3(4.3, 1.7, -5.2), pose.position, 3e-7)

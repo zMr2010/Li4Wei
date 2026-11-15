@@ -5,7 +5,7 @@ import kotlin.math.*
 data class World4(val boxes: List<Box4>, val spheres: List<Sphere4>)
 data class MotionResult(val changed: Boolean, val blocked: Boolean, val completed: Boolean)
 
-/** Player-centered affine sections with one angle and planar, collision-checked locomotion. */
+/** Player-centered affine sections with one angle and collision-checked locomotion. */
 class FourthwardGame(
     private val levels: List<TutorialLevel> = TutorialLevels.all(),
     val progress: LevelProgress = LevelProgress.forLevels(levels),
@@ -74,6 +74,10 @@ class FourthwardGame(
     private var checkpointPose: CheckpointPose? = null
     val playerRadius = 0.22
     val playerHeight = 1.7
+    val playerHeadRadius = 0.12
+    // Rejected raw vertical motion moves the rendered frame, but must not drag the feet
+    // through the opposite wall. Feet counter this correction in local tracking coordinates.
+    private var physicalVerticalCorrection = 0.0
     private var hasTrackingSample = false
     private var observationEyeHeight = trackedHead.y
 
@@ -172,7 +176,7 @@ class FourthwardGame(
                         abs(delta.dot(box.basis[1])) / 2, abs(delta.dot(box.basis[2])) / 2,
                         abs(delta.dot(box.basis[3])) / 2))
                 SliceGeometry.sliceBox(swept, frame)?.let {
-                    SliceGeometry.intersectsCapsule(it, feet(trackedHead), playerRadius, playerHeight)
+                    occupied(it, feet(trackedHead), trackedHead)
                 } ?: false
             }
         }
@@ -225,21 +229,40 @@ class FourthwardGame(
         rotate(delta)
     }
 
-    /** Native x/z are the slice's side/depth directions. Input y is ignored: no jump/fly axis. */
+    /** Compatibility path for ground-only callers; native x/z are slice side/depth. */
     fun movePlanar(deltaLocal: Vec3): MotionResult {
+        require(deltaLocal.finite())
+        return move(Vec3(deltaLocal.x, 0.0, deltaLocal.z))
+    }
+
+    /** Artificial movement within the current slice. Native y is the fixed world Z axis.
+     * Translate the section origin rather than the raw XR pose so both eyes and hands retain
+     * their physical relationship, and sweep the entire capsule on combined XYZ movement. */
+    fun move(deltaLocal: Vec3): MotionResult {
         require(deltaLocal.finite())
         lastMotionBlocked = false
         if (locomotionLocked) return MotionResult(false, false, completed)
         if (completed && level.motionTopic == null) return MotionResult(false, false, completed)
-        val distance = hypot(deltaLocal.x, deltaLocal.z)
+        val distance = deltaLocal.length()
         if (distance <= 1e-12) return MotionResult(false, false, completed)
         val steps = max(1, ceil(distance / 0.04).toInt())
-        val step = Vec3(deltaLocal.x / steps, 0.0, deltaLocal.z / steps)
+        val requestedStep = deltaLocal * (1.0 / steps)
         var changed = false
         for (index in 0 until steps) {
             val start = feet(trackedHead)
-            if (sweepBlocked(frame, start, start + step)) { lastMotionBlocked = true; break }
-            frame = frame.movedPlanar(step.x, step.z)
+            // VrSceneBuilder draws the shared reference ground at world Z=0. Descending
+            // stops there even in lessons without a separate solid floor box.
+            val minimumY = max(-playerFootWorld().z, playerHeadRadius + .001 - playerWorld().z)
+            val step = requestedStep.copy(y = max(requestedStep.y, minimumY.coerceAtMost(0.0)))
+            if (step.y > requestedStep.y + 1e-12) lastMotionBlocked = true
+            if (step.lengthSquared() <= 1e-24) break
+            val sections = solidSections(frame)
+            if (sweepBlocked(sections, start, start + step) ||
+                headSweepBlocked(sections, trackedHead, trackedHead + step)) {
+                lastMotionBlocked = true; break
+            }
+            frame = SliceFrame(frame.angleRadians,
+                frame.origin + frame.right * step.x + frame.up * step.y + frame.forward * step.z)
             changed = true
             checkCompletion()
             if (completed && level.motionTopic == null) break
@@ -270,22 +293,40 @@ class FourthwardGame(
         if (!hasTrackingSample) {
             val spawnFeet = playerFootWorld()
             trackedHead = localHead
+            physicalVerticalCorrection = 0.0
             frame = SliceFrame(frame.angleRadians, spawnFeet - frame.right * localHead.x - frame.forward * localHead.z)
             hasTrackingSample = true
-            physicalContact = !canOccupy(frame, feet(localHead))
+            physicalContact = !fitInitialEyeHeight()
             lastMotionBlocked = physicalContact
             checkCompletion()
             return MotionResult(true, physicalContact, completed)
         }
         val changed = (localHead - trackedHead).lengthSquared() > 1e-16
         val start = feet(trackedHead)
-        val delta = feet(localHead) - start
-        val fraction = safePhysicalFraction(start, delta)
-        physicalContact = fraction < 1.0
+        val delta = localHead - trackedHead
+        val horizontal = Vec3(delta.x, 0.0, delta.z)
+        val sections = solidSections(frame)
+        // Keep the existing horizontal response: contact with a wall must still allow a
+        // clear crouch/stand movement instead of scaling away all raw vertical motion.
+        val bodyFraction = safePhysicalFraction(horizontal) { fraction ->
+            sweepBlocked(sections, start, start + horizontal * fraction)
+        }
+        val headDelta = horizontal * bodyFraction + Vec3(0.0, delta.y, 0.0)
+        val startHeight = bodyHeight(trackedHead)
+        val headFraction = safePhysicalFraction(headDelta) { fraction ->
+            val nextHead = trackedHead + headDelta * fraction
+            frame.world(nextHead).z <= playerHeadRadius ||
+                headSweepBlocked(sections, trackedHead, nextHead) || sections.any {
+                SliceGeometry.intersectsSweptCapsule(it, start, start + horizontal * (bodyFraction * fraction),
+                    playerRadius, startHeight, bodyHeight(nextHead))
+            }
+        }
+        physicalContact = bodyFraction < 1.0 || headFraction < 1.0
         if (physicalContact) {
-            // W(newHead) = W(oldHead) + basis * (fraction * rawDelta).
-            val rejected = delta * (1.0 - fraction)
-            frame = frame.movedPlanar(-rejected.x, -rejected.z)
+            val rejected = delta - headDelta * headFraction
+            frame = SliceFrame(frame.angleRadians, frame.origin - frame.right * rejected.x -
+                frame.up * rejected.y - frame.forward * rejected.z)
+            physicalVerticalCorrection -= rejected.y
         }
         trackedHead = localHead
         lastMotionBlocked = physicalContact
@@ -302,6 +343,7 @@ class FourthwardGame(
             hasTrackingSample = true
         }
         observationEyeHeight = trackedHead.y
+        physicalVerticalCorrection = 0.0
         frame = if (locomotionLocked) fixedObservationFrame(0.0) else
             SliceFrame(0.0, level.start - Vec4.X * trackedHead.x - Vec4.W * trackedHead.z)
         completed = false
@@ -319,6 +361,10 @@ class FourthwardGame(
         hintTier = 0
         missionRevision++
         animatedWorld = animatedWorldAt(0.0)
+        if (!locomotionLocked) {
+            physicalContact = !fitInitialEyeHeight()
+            lastMotionBlocked = physicalContact
+        }
         checkCompletion()
     }
 
@@ -335,13 +381,14 @@ class FourthwardGame(
             hasTrackingSample = true
         }
         val basis = SliceFrame(checkpoint.angle)
+        physicalVerticalCorrection = 0.0
         frame = SliceFrame(basis.angleRadians, checkpoint.feet -
             basis.right * trackedHead.x - basis.forward * trackedHead.z)
         motionTimeSeconds = checkpoint.motionTime
         animatedWorld = animatedWorldAt(motionTimeSeconds)
         motionBlocked = false
-        physicalContact = false
-        lastMotionBlocked = false
+        physicalContact = !fitInitialEyeHeight()
+        lastMotionBlocked = physicalContact
         hintTier = 0
         missionRevision++
         checkCompletion()
@@ -408,9 +455,8 @@ class FourthwardGame(
             basis.up * trackedHead.y - basis.forward * trackedHead.z)
     }
 
-    private fun safePhysicalFraction(start: Vec3, delta: Vec3): Double {
-        val sections = solidSections(frame)
-        if (!sweepBlocked(sections, start, start + delta)) return 1.0
+    private fun safePhysicalFraction(delta: Vec3, blockedAt: (Double) -> Boolean): Double {
+        if (!blockedAt(1.0)) return 1.0
         val distance = delta.length()
         if (distance <= 1e-12) return 0.0
         // Sweeping each prefix also catches a single tracking sample that crosses a thin
@@ -419,7 +465,7 @@ class FourthwardGame(
         var blocked = 1.0
         repeat(28) {
             val middle = (safe + blocked) * 0.5
-            if (sweepBlocked(sections, start, start + delta * middle)) blocked = middle
+            if (blockedAt(middle)) blocked = middle
             else safe = middle
         }
         return (safe - 0.001 / distance).coerceAtLeast(0.0)
@@ -427,12 +473,54 @@ class FourthwardGame(
 
     private fun solidSections(candidate: SliceFrame): List<BoxSection> = world.boxes.filter { it.solid }.mapNotNull { SliceGeometry.sliceBox(it, candidate) }
     private fun canOccupy(candidate: SliceFrame, feet: Vec3): Boolean = solidSections(candidate).none {
-        SliceGeometry.intersectsCapsule(it, feet, playerRadius, playerHeight)
-    }
-    private fun sweepBlocked(candidate: SliceFrame, start: Vec3, end: Vec3): Boolean = sweepBlocked(solidSections(candidate), start, end)
+        occupied(it, feet, trackedHead)
+    } && candidate.world(feet).z >= -1e-9 && candidate.world(trackedHead).z >= playerHeadRadius
     private fun sweepBlocked(sections: List<BoxSection>, start: Vec3, end: Vec3): Boolean = sections.any {
-        SliceGeometry.intersectsSweptCapsule(it, start, end, playerRadius, playerHeight)
+        SliceGeometry.intersectsSweptCapsule(it, start, end, playerRadius, bodyHeight(trackedHead))
     }
-    private fun feet(head: Vec3) = Vec3(head.x, 0.0, head.z)
+    private fun headSweepBlocked(sections: List<BoxSection>, start: Vec3, end: Vec3) = sections.any {
+        SliceGeometry.intersectsSweptCapsule(it, sphereFeet(start), sphereFeet(end), playerHeadRadius, 2.0 * playerHeadRadius)
+    }
+    private fun occupied(section: BoxSection, feet: Vec3, head: Vec3): Boolean =
+        SliceGeometry.intersectsCapsule(section, feet, playerRadius, bodyHeight(head)) ||
+            SliceGeometry.intersectsCapsule(section, sphereFeet(head), playerHeadRadius, 2.0 * playerHeadRadius)
+    private fun sphereFeet(head: Vec3) = head - Vec3(0.0, playerHeadRadius, 0.0)
+    private fun bodyHeight(head: Vec3) = max(playerHeight, head.y + physicalVerticalCorrection + playerHeadRadius)
+    private fun feet(head: Vec3) = Vec3(head.x, -physicalVerticalCorrection, head.z)
+
+    /** A simulator pose can start above a roof or below the visible Z=0 ground. Fit only its
+     * effective eye height to safety; neither the actual pose nor the spawn feet move. */
+    private fun fitInitialEyeHeight(): Boolean {
+        val sections = solidSections(frame)
+        val base = feet(trackedHead)
+        val feetZ = frame.world(base).z
+        if (feetZ < -1e-9) return false
+        val currentHeight = trackedHead.y + physicalVerticalCorrection
+        val groundHeight = playerHeadRadius + .001 - feetZ
+        val minimum = max(groundHeight, min(currentHeight, playerHeight - playerHeadRadius))
+        fun clear(height: Double): Boolean {
+            val head = trackedHead + Vec3(0.0, height - currentHeight, 0.0)
+            return feetZ + height >= playerHeadRadius && sections.none { occupied(it, base, head) }
+        }
+        if (clear(currentHeight)) return true
+        if (!clear(minimum)) return false
+        if (minimum > currentHeight) {
+            val correction = minimum - currentHeight
+            physicalVerticalCorrection += correction
+            frame = SliceFrame(frame.angleRadians, frame.origin + frame.up * correction)
+            return true
+        }
+        if (minimum == currentHeight) return false
+        var safe = minimum
+        var blocked = currentHeight
+        repeat(28) {
+            val middle = (safe + blocked) * .5
+            if (clear(middle)) safe = middle else blocked = middle
+        }
+        val correction = (safe - .001).coerceAtLeast(minimum) - currentHeight
+        physicalVerticalCorrection += correction
+        frame = SliceFrame(frame.angleRadians, frame.origin + frame.up * correction)
+        return true
+    }
     private fun Vec3.finite() = x.isFinite() && y.isFinite() && z.isFinite()
 }

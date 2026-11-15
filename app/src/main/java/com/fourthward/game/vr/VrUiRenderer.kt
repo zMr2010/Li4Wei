@@ -552,7 +552,7 @@ class VrUiRenderer {
         val voice = Ink.paint(17f, Ink.dim)
         Ink.text(c, status.voiceLabel, 882f - voice.measureText(status.voiceLabel), 204f, voice)
         val dock = if (status.geometryTopic == null && status.motionTopic == null) "右侧" else "下方"
-        Ink.text(c, "N / 空格 下一步 · B 上一步 · R 重播 · 也可用左手点击${dock}按钮", 18f, 228f, Ink.paint(17f, Ink.dim), 864f)
+        Ink.text(c, "N 下一步 · B 上一步 · R 重播 · 也可用左手点击${dock}按钮", 18f, 228f, Ink.paint(17f, Ink.dim), 864f)
     }
 
     private fun drawComparisonLabel(c: Canvas, label: VrComparisonLabel) {
@@ -588,9 +588,9 @@ class VrUiRenderer {
         Ink.lines(c, status.hint, 18f, 108f, 604, Ink.paint(18f, Ink.dim), 2)
         val controls = when {
             !status.keyboardMode -> "张手背向自己横移：旋转 · 右掌朝自己：辅助面板"
-            status.expedition -> "WASD 移动 · Q/E 旋转 · H 提示 · T ${if (status.checkpointAvailable && !status.completed) "返回路标" else "重试"}"
+            status.expedition -> "WASD 随视线移动 · 空格/Shift 升降 · Q/E 旋转 · H 提示"
             status.locomotionLocked -> "Q/E 旋转 · M 面板 · L 关卡列表"
-            else -> "WASD 移动 · Q/E 旋转 · M 面板 · L 关卡列表"
+            else -> "WASD 随视线移动 · 空格/Shift 升降 · Q/E 旋转 · M 面板"
         }
         Ink.text(c, controls, 18f, 166f, Ink.paint(16f, Ink.dim), 604f)
     }

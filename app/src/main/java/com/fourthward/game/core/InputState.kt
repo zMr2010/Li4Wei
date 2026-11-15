@@ -1,6 +1,7 @@
 package com.fourthward.game.core
 
 import kotlin.math.hypot
+import kotlin.math.sqrt
 
 /** Device-independent input, consumed once per simulation tick. */
 enum class InputCommand {
@@ -13,7 +14,7 @@ enum class InputCommand {
 }
 
 enum class InputKey {
-    FORWARD, BACKWARD, LEFT, RIGHT, ROTATE_LEFT, ROTATE_RIGHT,
+    FORWARD, BACKWARD, LEFT, RIGHT, ASCEND, DESCEND, ROTATE_LEFT, ROTATE_RIGHT,
     MENU, RESET, REFERENCE, RESTART, NEXT_LEVEL, SELECT, ACTIVATE,
     PREVIOUS_STEP, LESSON,
     LEVEL_LIST, BACK, LEVEL_1, LEVEL_2, LEVEL_3,
@@ -25,6 +26,7 @@ data class InputFrame(
     val moveForwardMeters: Double = 0.0,
     val thetaRadians: Double = 0.0,
     val commands: List<InputCommand> = emptyList(),
+    val moveUpMeters: Double = 0.0,
 )
 
 /** A copied controller sample; the adapter must mark absent controllers as disconnected. */
@@ -106,6 +108,11 @@ class InputState(
             InputKey.NEXT_GROUP -> InputCommand.NEXT_GROUP
             else -> null
         }
+        // Shift+Tab is a navigation chord, not a request to descend while choosing a button.
+        if (key == InputKey.SELECT && shift) {
+            held.remove(InputKey.DESCEND)
+            pendingContinuous.remove(InputKey.DESCEND)
+        }
         if (command != null) enqueue(command) else pendingContinuous.add(key)
     }
 
@@ -142,8 +149,9 @@ class InputState(
         val stick = if (pad?.leftConnected == true) radialDeadzone(pad.leftX, pad.leftY) else Pair(0.0, 0.0)
         var right = axis(InputKey.RIGHT, InputKey.LEFT) + stick.first
         var forward = axis(InputKey.FORWARD, InputKey.BACKWARD) + stick.second
-        val movementLength = hypot(right, forward)
-        if (movementLength > 1.0) { right /= movementLength; forward /= movementLength }
+        var up = axis(InputKey.ASCEND, InputKey.DESCEND)
+        val movementLength = sqrt(right * right + forward * forward + up * up)
+        if (movementLength > 1.0) { right /= movementLength; forward /= movementLength; up /= movementLength }
         val controllerTheta = if (pad?.rightConnected == true) radialDeadzone(pad.rightX, 0.0).first else 0.0
         val theta = (axis(InputKey.ROTATE_RIGHT, InputKey.ROTATE_LEFT) + controllerTheta).coerceIn(-1.0, 1.0)
         val queued = commands.toList()
@@ -154,6 +162,7 @@ class InputState(
             moveForwardMeters = forward * walkMetersPerSecond * dt,
             thetaRadians = theta * thetaRadiansPerSecond * dt,
             commands = queued,
+            moveUpMeters = up * walkMetersPerSecond * dt,
         )
     }
 

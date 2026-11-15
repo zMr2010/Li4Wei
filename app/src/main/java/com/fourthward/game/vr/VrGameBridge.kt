@@ -96,13 +96,15 @@ class VrGameBridge(context: Context) {
             KeyEvent.KEYCODE_S -> InputKey.BACKWARD
             KeyEvent.KEYCODE_A -> InputKey.LEFT
             KeyEvent.KEYCODE_D -> InputKey.RIGHT
+            KeyEvent.KEYCODE_SPACE -> InputKey.ASCEND
+            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> InputKey.DESCEND
             KeyEvent.KEYCODE_Q -> InputKey.ROTATE_LEFT
             KeyEvent.KEYCODE_E -> InputKey.ROTATE_RIGHT
             KeyEvent.KEYCODE_M -> InputKey.MENU
             KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_P -> InputKey.RESET
             KeyEvent.KEYCODE_V -> InputKey.REFERENCE
             KeyEvent.KEYCODE_T -> InputKey.RESTART
-            KeyEvent.KEYCODE_N, KeyEvent.KEYCODE_SPACE -> InputKey.NEXT_LEVEL
+            KeyEvent.KEYCODE_N -> InputKey.NEXT_LEVEL
             KeyEvent.KEYCODE_B -> InputKey.PREVIOUS_STEP
             KeyEvent.KEYCODE_H -> InputKey.LESSON
             KeyEvent.KEYCODE_L -> InputKey.LEVEL_LIST
@@ -197,9 +199,10 @@ class VrGameBridge(context: Context) {
             if (game.rotate(theta)) motionSinceLog = true
             if (game.lastMotionBlocked) blockedFeedback = 0.8
         }
-        val movement = Vec3(actions.moveRightMeters, 0.0, -actions.moveForwardMeters)
-        if (navigationRevision == commandPage && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList && movement.lengthSquared() > 1e-16) {
-            val result = game.movePlanar(movement)
+        val movement = tracked?.let { VrTrackingMath.locomotion(it, actions.moveRightMeters,
+            actions.moveForwardMeters, actions.moveUpMeters) } ?: Vec3.ZERO
+        if (focused && navigationRevision == commandPage && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList && movement.lengthSquared() > 1e-16) {
+            val result = game.move(movement)
             motionSinceLog = motionSinceLog || result.changed
             if (result.blocked) blockedFeedback = 0.8
         }
@@ -701,7 +704,7 @@ class VrGameBridge(context: Context) {
 
     private fun VrTrackingMath.Pose.renderPose() = VrPose(position, right, up, normal)
     private fun logState(reason: String) {
-        Log.i(TAG, "$reason rawHead=${lastHead.position} playerHead4=${game.playerWorld()} playerFeet4=${game.playerFootWorld()} theta=${game.rotationDegrees} level=${game.levelIndex + 1} completed=${game.completed} origin=${game.frame.origin} checkpoints=${game.completedCheckpointIds} hint=${game.hintTier} chapter=${catalog.levelCode(game.levelIndex)} motionTime=${game.motionTimeSeconds} observation=${game.observationStep}/${game.observationCount} movingContact=${game.motionBlocked}")
+        Log.i(TAG, "$reason rawHead=${lastHead.position} viewForward=${lastHead.normal * -1.0} playerHead4=${game.playerWorld()} playerFeet4=${game.playerFootWorld()} theta=${game.rotationDegrees} level=${game.levelIndex + 1} completed=${game.completed} origin=${game.frame.origin} checkpoints=${game.completedCheckpointIds} hint=${game.hintTier} chapter=${catalog.levelCode(game.levelIndex)} motionTime=${game.motionTimeSeconds} observation=${game.observationStep}/${game.observationCount} movingContact=${game.motionBlocked}")
     }
     private companion object {
         const val TAG = "FourthwardXR/Game"

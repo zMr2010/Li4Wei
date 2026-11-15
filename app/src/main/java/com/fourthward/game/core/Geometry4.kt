@@ -190,14 +190,16 @@ object SliceGeometry {
         return false
     }
 
-    /** The swept capsule centerline is a rectangle. Its exact distance to every polytope
-     * face prevents tunneling, including oblique and very thin visible sections. */
-    fun intersectsSweptCapsule(section: BoxSection, start: Vec3, end: Vec3, radius: Double, height: Double): Boolean {
+    /** The swept capsule centerline is a rectangle or a trapezoid when the head rises.
+     * Its distance to every polytope face prevents tunneling through thin sections. */
+    fun intersectsSweptCapsule(section: BoxSection, start: Vec3, end: Vec3, radius: Double, height: Double,
+                               endHeight: Double = height): Boolean {
+        require(radius > 0.0 && height >= 2.0 * radius && endHeight >= 2.0 * radius)
         if (!section.source.solid) return false
-        if (intersectsCapsule(section, start, radius, height) || intersectsCapsule(section, end, radius, height)) return true
-        if ((end - start).lengthSquared() < 1e-16) return false
+        if (intersectsCapsule(section, start, radius, height) || intersectsCapsule(section, end, radius, endHeight)) return true
+        if ((end - start).lengthSquared() < 1e-16 && abs(endHeight - height) < 1e-12) return false
         val a = start + Vec3(0.0, radius, 0.0); val b = start + Vec3(0.0, height - radius, 0.0)
-        val c = end + Vec3(0.0, height - radius, 0.0); val d = end + Vec3(0.0, radius, 0.0)
+        val c = end + Vec3(0.0, endHeight - radius, 0.0); val d = end + Vec3(0.0, radius, 0.0)
         val mesh = section.mesh
         for (i in mesh.indices.indices step 3) {
             val p = mesh.positions[mesh.indices[i]]; val q = mesh.positions[mesh.indices[i + 1]]; val r = mesh.positions[mesh.indices[i + 2]]
@@ -234,6 +236,10 @@ object SliceGeometry {
 
     private fun pointTriangleDistanceSquared(p: Vec3, a: Vec3, b: Vec3, c: Vec3): Double {
         val ab = b - a; val ac = c - a; val ap = p - a
+        // Pure vertical motion and sphere sweeps collapse the centerline quad to segments.
+        // Handle those before the barycentric edge tests, which can otherwise divide 0/0.
+        if (ab.cross(ac).lengthSquared() <= 1e-24) return minOf(
+            segmentDistanceSquared(p, p, a, b), segmentDistanceSquared(p, p, b, c), segmentDistanceSquared(p, p, c, a))
         val d1 = ab.dot(ap); val d2 = ac.dot(ap)
         if (d1 <= 0.0 && d2 <= 0.0) return ap.lengthSquared()
         val bp = p - b; val d3 = ab.dot(bp); val d4 = ac.dot(bp)

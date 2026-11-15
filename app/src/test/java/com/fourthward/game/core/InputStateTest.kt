@@ -30,9 +30,42 @@ class InputStateTest {
 
     @Test fun oppositeDirectionsCancel() {
         val state = input()
-        listOf(InputKey.FORWARD, InputKey.BACKWARD, InputKey.ROTATE_LEFT, InputKey.ROTATE_RIGHT)
+        listOf(InputKey.FORWARD, InputKey.BACKWARD, InputKey.ASCEND, InputKey.DESCEND,
+            InputKey.ROTATE_LEFT, InputKey.ROTATE_RIGHT)
             .forEach { state.key(it, true) }
         assertEquals(InputFrame(), state.frame(0.05, now))
+    }
+
+    @Test fun elevationIsHeldMovementAndThreeAxisSpeedDoesNotIncrease() {
+        val state = input()
+        state.key(InputKey.ASCEND, true)
+        val ascending = state.frame(.05, now)
+        assertEquals(.075, ascending.moveUpMeters, 1e-10)
+        assertTrue(ascending.commands.isEmpty())
+        state.key(InputKey.FORWARD, true); state.key(InputKey.RIGHT, true)
+        val diagonal = state.frame(.05, now)
+        val length = Vec3(diagonal.moveRightMeters, diagonal.moveUpMeters, diagonal.moveForwardMeters).length()
+        assertEquals(.075, length, 1e-10)
+        state.clearForPageChange()
+        assertEquals(InputFrame(), state.frame(.05, now))
+        state.key(InputKey.DESCEND, true)
+        assertEquals(-.075, state.frame(.05, now).moveUpMeters, 1e-10)
+        state.key(InputKey.DESCEND, false)
+        assertEquals(InputFrame(), state.frame(.05, now))
+    }
+
+    @Test fun elevationStopsOnFocusLossAndShiftTabDoesNotDescend() {
+        val state = input()
+        state.key(InputKey.ASCEND, true)
+        state.setEnabled(false); state.setEnabled(true)
+        assertEquals(InputFrame(), state.frame(.05, now))
+        state.key(InputKey.DESCEND, true)
+        state.key(InputKey.SELECT, true, shift = true)
+        val navigation = state.frame(.05, now)
+        assertEquals(0.0, navigation.moveUpMeters, 0.0)
+        assertEquals(listOf(InputCommand.SELECT_PREVIOUS_CONTROL), navigation.commands)
+        state.key(InputKey.SELECT, false)
+        assertEquals(InputFrame(), state.frame(.05, now))
     }
 
     @Test fun actionKeysAreEdgeTriggeredAndTabCanReverse() {
