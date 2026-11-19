@@ -564,7 +564,9 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
             debugAnchor = null
             null
         }
-        val frame = handControls.update(dt, head, left, right, debugDock ?: activeDock(head), activePanelLayout(), disabledPanelActions(),
+        val defaultDock = debugDock ?: activeDock(head)
+        val dock = if (welcomeVisible || defaultDock == null) defaultDock else handControls.preferredPanel ?: defaultDock
+        val frame = handControls.update(dt, head, left, right, dock, activePanelLayout(), disabledPanelActions(),
             interactionReady = ui.interactionReady(navigationRevision),
             allowMotion = lesson == null && !levelListVisible,
             allowPanelGestures = !welcomeVisible && !debugVisible,

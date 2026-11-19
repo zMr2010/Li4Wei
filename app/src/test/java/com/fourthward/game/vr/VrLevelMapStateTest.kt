@@ -77,19 +77,24 @@ class VrLevelMapStateTest {
             assertTrue(map.segments().all { it.y1 >= it.y2 })
         }
     }
-    @Test fun atlasHoldsTheLargestMapAndEveryOverlayWithoutOverlap() {
+    @Test fun atlasHoldsTheLargestMapWithAGutterAtTheCoarsestMip() {
         val graph = LevelDependencyGraph(TutorialLevels.all())
         val maxButtons = (0..graph.maxFirstRow).maxOf { graph.window(it).layout.buttons.size }
         assertEquals(maxButtons, VrUiAtlas.buttons.size)
         VrUiAtlas.all.forEach { region ->
             assertTrue(region.x >= 0 && region.y >= 0)
             assertTrue(region.x + region.width <= 2048 && region.y + region.height <= 1024)
+            assertEquals(0, region.x % 8)
+            assertEquals(0, region.y % 8)
         }
+        // One texel at level 3 covers eight source texels. Bilinear filtering can
+        // reach one mip texel beyond a tile's occupied cells in either direction.
+        fun mipEnd(start: Int, size: Int) = (start + size + 7) / 8
         VrUiAtlas.all.forEachIndexed { index, a ->
             VrUiAtlas.all.drop(index + 1).forEach { b ->
-                val overlap = a.x < b.x + b.width && b.x < a.x + a.width &&
-                    a.y < b.y + b.height && b.y < a.y + a.height
-                assertFalse("Atlas regions overlap: $a / $b", overlap)
+                val hasGutter = mipEnd(a.x, a.width) < b.x / 8 || mipEnd(b.x, b.width) < a.x / 8 ||
+                    mipEnd(a.y, a.height) < b.y / 8 || mipEnd(b.y, b.height) < a.y / 8
+                assertTrue("Atlas tiles need a gutter at level 3: $a / $b", hasGutter)
             }
         }
     }

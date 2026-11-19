@@ -121,6 +121,41 @@ class VrHandControlsTest {
         }
     }
 
+    @Test fun sceneResetHidesThePanelAndTheNextSummonRestoresItsStagePose() {
+        val controls = VrHandControls()
+        val placed = openPanel(controls)
+        controls.reset()
+        val movedHead = head.copy(position = head.position + Vec3(.30, -.03, .06))
+        val movedHand = openHand(reach + Vec3(.19, .04, .05), left = false)
+        assertNull(update(controls, view = movedHead).panel)
+        assertEquals(placed, controls.preferredPanel)
+        val restored = openAfterThreeSeconds { update(controls, view = movedHead, right = movedHand) }
+        assertEquals(placed, restored.panel)
+
+        val closingHand = openHand(placed.pose.position, left = true)
+        update(controls, view = movedHead, left = closingHand)
+        assertTrue(update(controls, view = movedHead, left = fist(closingHand)).closed)
+        val relocated = openAfterThreeSeconds { update(controls, view = movedHead, right = movedHand) }
+        val expected = VrTrackingMath.panelPose(movedHand.palm + checkNotNull(movedHand.palmNormal) * .04, movedHead)
+        assertEquals(expected, relocated.panel?.pose)
+        assertNotEquals(placed, relocated.panel)
+        assertEquals(relocated.panel, controls.preferredPanel)
+    }
+
+    @Test fun displayingADefaultDockDoesNotSaveItAsAHandPlacement() {
+        val controls = VrHandControls()
+        val dock = VrHandControls.Panel(checkNotNull(VrTrackingMath.startPanelPose(head)), scale = 1.6)
+        val frame = controls.update(.05, head, null, null, dock, layout, emptySet(),
+            interactionReady = true, allowMotion = false, panelHoldDeltaSeconds = .05)
+        assertEquals(dock, frame.panel)
+        assertNull(controls.preferredPanel)
+
+        controls.reset()
+        val opened = openPanel(controls)
+        assertNotEquals(dock.pose, opened.pose)
+        assertEquals(opened, controls.preferredPanel)
+    }
+
     @Test fun interruptingThePoseRestartsTheThreeSecondHold() {
         val palm = openHand(reach, left = false)
         for (interruption in listOf(null, fist(palm), openHand(reach, left = false, forwardPalm = true))) {

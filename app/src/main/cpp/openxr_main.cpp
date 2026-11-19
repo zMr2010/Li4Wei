@@ -3,6 +3,7 @@
 #include <android_native_app_glue.h>
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
 #include <jni.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -148,14 +149,31 @@ uniform bool uLinearize;
 uniform float uOpacity;
 out vec4 outColor;
 vec3 linear(vec3 c){return mix(c/12.92,pow((c+0.055)/1.055,vec3(2.4)),step(vec3(0.04045),c));}
-void main(){vec4 c=texture(uTexture,vUv);if(uLinearize && c.a>0.0001)c.rgb=linear(c.rgb/c.a)*c.a;outColor=c*clamp(uOpacity,0.0,1.0);}
+void main(){
+    // Canvas has already antialiased the glyphs. Keep their original strokes at
+    // reading distance, then blend down the mip chain as the panel gets smaller.
+    vec4 c = texture(uTexture, vUv, -1.0);
+    if (uLinearize && c.a > 0.0001) c.rgb = linear(c.rgb / c.a) * c.a;
+    outColor = c * clamp(uOpacity, 0.0, 1.0);
+}
+)";
+const char* presentVertex = R"(#version 300 es
+const vec2 corners[3] = vec2[3](vec2(-1,-1), vec2(3,-1), vec2(-1,3));
+void main(){gl_Position=vec4(corners[gl_VertexID],0,1);}
+)";
+const char* presentFragment = R"(#version 300 es
+precision highp float;
+uniform highp sampler2D uResolvedEye;
+out vec4 outColor;
+void main(){outColor=texelFetch(uResolvedEye,ivec2(gl_FragCoord.xy),0);}
 )";
 struct Swapchain {
     XrSwapchain handle = XR_NULL_HANDLE;
     int width = 0, height = 0;
-    GLuint depth = 0;
     std::vector<XrSwapchainImageOpenGLESKHR> images;
+    std::vector<GLuint> framebuffers;
 };
+enum class EyeResolve { Direct, RenderToTexture, Blit };
 class Game {
 public:
     android_app* app;
@@ -173,7 +191,11 @@ public:
     EGLConfig config{};
     std::vector<XrView> views;
     std::vector<Swapchain> swapchains;
-    GLuint framebuffer = 0, worldProgram = 0, uiProgram = 0, worldVao = 0, worldVbo = 0;
+    GLuint eyeDepth = 0, msaaColor = 0, msaaFramebuffer = 0;
+    GLuint resolvedEye = 0, resolveFramebuffer = 0, presentProgram = 0;
+    PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC attachMultisampleTexture = nullptr;
+    PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC allocateTileStorage = nullptr;
+    GLuint worldProgram = 0, uiProgram = 0, worldVao = 0, worldVbo = 0;
     GLuint uiVao = 0, uiVbo = 0, uiTexture = 0;
     GLuint effectsVao = 0, effectsVbo = 0, exhibitProgram = 0;
     GLint exhibitMvp = -1, exhibitMatrix = -1, exhibitCenter = -1;
@@ -317,22 +339,132 @@ public:
             XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
             info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;info.format=format;
             info.sampleCount=1;info.width=target.width;info.height=target.height;info.faceCount=1;info.arraySize=1;info.mipCount=1;
-            XR_CHECK(xrCreateSwapchain(session,&info,&target.handle));
+            XR_CHECK(xrCreateSwapchain(session, &info, &target.handle));
             uint32_t imageCount=0;XR_CHECK(xrEnumerateSwapchainImages(target.handle,0,&imageCount,nullptr));
             target.images.resize(imageCount,{XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
             XR_CHECK(xrEnumerateSwapchainImages(target.handle,imageCount,&imageCount,reinterpret_cast<XrSwapchainImageBaseHeader*>(target.images.data())));
-            glGenRenderbuffers(1,&target.depth);glBindRenderbuffer(GL_RENDERBUFFER,target.depth);
-            glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH_COMPONENT24,target.width,target.height);
             INFO("Eye %zu swapchain=%dx%d images=%u format=%lld",eye,target.width,target.height,imageCount,static_cast<long long>(format));
         }
+        createEyeFramebuffers(static_cast<GLenum>(format));
+    }
+    void deleteEyeFramebuffers() {
+        for (auto& eye : swapchains) {
+            glDeleteFramebuffers(eye.framebuffers.size(), eye.framebuffers.data());
+            eye.framebuffers.clear();
+        }
+        glDeleteFramebuffers(1, &msaaFramebuffer);
+        glDeleteFramebuffers(1, &resolveFramebuffer);
+        glDeleteTextures(1, &resolvedEye);
+        glDeleteRenderbuffers(1, &msaaColor);
+        glDeleteRenderbuffers(1, &eyeDepth);
+        msaaFramebuffer = msaaColor = eyeDepth = resolveFramebuffer = resolvedEye = 0;
+    }
+    bool eyeFramebufferComplete(int expectedSamples) {
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+        // Some GLES translators expose the render-to-texture entry points but silently
+        // create a single-sample target. Check the actual draw framebuffer before using it.
+        GLint actualSamples = 0;
+        glGetIntegerv(GL_SAMPLES, &actualSamples);
+        return std::max(1, actualSamples) == expectedSamples;
+    }
+    bool tryEyeFramebuffers(GLenum format, GLsizei samples, EyeResolve resolve, int width, int height) {
+        // Both eyes reuse the same transient storage and can have different viewports.
+        glGenRenderbuffers(1, &eyeDepth);
+        glBindRenderbuffer(GL_RENDERBUFFER, eyeDepth);
+        if (resolve == EyeResolve::RenderToTexture) {
+            allocateTileStorage(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, width, height);
+        } else if (resolve == EyeResolve::Blit) {
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, width, height);
+            glGenRenderbuffers(1, &msaaColor);
+            glBindRenderbuffer(GL_RENDERBUFFER, msaaColor);
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, format, width, height);
+            glGenFramebuffers(1, &msaaFramebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, msaaFramebuffer);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msaaColor);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, eyeDepth);
+            if (!eyeFramebufferComplete(samples)) return false;
+            glGenTextures(1, &resolvedEye);
+            glBindTexture(GL_TEXTURE_2D, resolvedEye);
+            glTexStorage2D(GL_TEXTURE_2D, 1, format, width, height);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glGenFramebuffers(1, &resolveFramebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, resolveFramebuffer);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resolvedEye, 0);
+            if (!eyeFramebufferComplete(1)) return false;
+        } else {
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+        }
+        for (auto& eye : swapchains) {
+            eye.framebuffers.resize(eye.images.size());
+            glGenFramebuffers(eye.framebuffers.size(), eye.framebuffers.data());
+            for (size_t i = 0; i < eye.images.size(); ++i) {
+                glBindFramebuffer(GL_FRAMEBUFFER, eye.framebuffers[i]);
+                const GLuint texture = eye.images[i].image;
+                if (resolve == EyeResolve::RenderToTexture) {
+                    attachMultisampleTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0, samples);
+                } else {
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+                }
+                if (resolve != EyeResolve::Blit)
+                    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, eyeDepth);
+                if (!eyeFramebufferComplete(resolve == EyeResolve::Blit ? 1 : samples)) return false;
+            }
+        }
+        return true;
+    }
+    void createEyeFramebuffers(GLenum format) {
+        GLint extensionCount = 0, maxSamples = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        for (GLint i = 0; i < extensionCount; ++i) {
+            const char* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i));
+            if (std::strcmp(name, "GL_EXT_multisampled_render_to_texture") == 0) {
+                attachMultisampleTexture = reinterpret_cast<PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC>(
+                    eglGetProcAddress("glFramebufferTexture2DMultisampleEXT"));
+                allocateTileStorage = reinterpret_cast<PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC>(
+                    eglGetProcAddress("glRenderbufferStorageMultisampleEXT"));
+                break;
+            }
+        }
+        int width = 0, height = 0;
+        for (const auto& eye : swapchains) {
+            width = std::max(width, eye.width);
+            height = std::max(height, eye.height);
+        }
+        auto configure = [&](int samples, EyeResolve mode, const char* label) {
+            const bool complete = tryEyeFramebuffers(format, samples, mode, width, height);
+            const GLenum error = glGetError();
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            if (complete && error == GL_NO_ERROR) {
+                INFO("Stereo eye rendering: %dx samples (%s)", samples, label);
+                return true;
+            }
+            INFO("Eye framebuffer unavailable: %dx %s (GL error 0x%x)", samples, label, error);
+            deleteEyeFramebuffers();
+            while (glGetError() != GL_NO_ERROR) {}
+            return false;
+        };
+        for (int samples : {4, 2}) {
+            if (samples > maxSamples) continue;
+            if (attachMultisampleTexture && allocateTileStorage &&
+                configure(samples, EyeResolve::RenderToTexture, "render to texture")) return;
+            if (configure(samples, EyeResolve::Blit, "texture resolve")) return;
+        }
+        if (configure(1, EyeResolve::Direct, "direct")) return;
+        throw std::runtime_error("No complete stereo eye framebuffer");
     }
     void createGraphics(){
         worldProgram=program(worldVertex,worldFragment);uiProgram=program(uiVertex,uiFragment);
+        if (msaaFramebuffer) {
+            presentProgram = program(presentVertex, presentFragment);
+            glUseProgram(presentProgram);
+            glUniform1i(glGetUniformLocation(presentProgram, "uResolvedEye"), 0);
+        }
         exhibitProgram=program(exhibitVertex,exhibitFragment);
         exhibitMvp=glGetUniformLocation(exhibitProgram,"uMvp");
         exhibitMatrix=glGetUniformLocation(exhibitProgram,"uProjection4");
         exhibitCenter=glGetUniformLocation(exhibitProgram,"uCenterAndFocal");
-        glGenFramebuffers(1,&framebuffer);
         glGenVertexArrays(1,&worldVao);glGenBuffers(1,&worldVbo);glBindVertexArray(worldVao);glBindBuffer(GL_ARRAY_BUFFER,worldVbo);
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,7*sizeof(float),nullptr);
         glEnableVertexAttribArray(1);glVertexAttribPointer(1,4,GL_FLOAT,GL_FALSE,7*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));
@@ -343,7 +475,9 @@ public:
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,5*sizeof(float),nullptr);
         glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,5*sizeof(float),reinterpret_cast<void*>(3*sizeof(float)));
         glGenTextures(1,&uiTexture);glBindTexture(GL_TEXTURE_2D,uiTexture);
-        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        // VrUiAtlas leaves a gutter between tiles through level 3.
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,3);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
         // Diagnostic geometry is replaced atomically by the bridge's first world snapshot.
         const float triangle[]={-.5f,1,-2,1,.85f,0,1, .5f,1,-2,.2f,.8f,.8f,1, 0,2,-2,1,1,1,1};
@@ -446,9 +580,11 @@ public:
                 void* pixels=nullptr;
                 if(AndroidBitmap_lockPixels(env,bitmap,&pixels)!=ANDROID_BITMAP_RESULT_SUCCESS)throw std::runtime_error("UI bitmap lock failed");
                 glBindTexture(GL_TEXTURE_2D,uiTexture);glPixelStorei(GL_UNPACK_ALIGNMENT,4);glPixelStorei(GL_UNPACK_ROW_LENGTH,info.stride/4);
-                glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,info.width,info.height,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+                if(!textureReady)glTexStorage2D(GL_TEXTURE_2D,4,GL_RGBA8,info.width,info.height);
+                glTexSubImage2D(GL_TEXTURE_2D,0,0,0,info.width,info.height,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
                 ++textureUploads;
                 glPixelStorei(GL_UNPACK_ROW_LENGTH,0);AndroidBitmap_unlockPixels(env,bitmap);textureReady=true;
+                glGenerateMipmap(GL_TEXTURE_2D);
                 if(!recycleBitmap){jclass bitmapClass=env->GetObjectClass(bitmap);recycleBitmap=env->GetMethodID(bitmapClass,"recycle","()V");env->DeleteLocalRef(bitmapClass);}
                 env->CallVoidMethod(bitmap,recycleBitmap);javaCheck("bitmap recycle");
             }
@@ -461,10 +597,8 @@ public:
     }
     void drawEye(size_t eye,uint32_t imageIndex){
         auto& target=swapchains[eye];
-        glBindFramebuffer(GL_FRAMEBUFFER,framebuffer);
-        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,target.images[imageIndex].image,0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,target.depth);
-        if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)throw std::runtime_error("Incomplete eye framebuffer");
+        const GLuint output = target.framebuffers[imageIndex];
+        glBindFramebuffer(GL_FRAMEBUFFER, msaaFramebuffer ? msaaFramebuffer : output);
         glViewport(0,0,target.width,target.height);glDisable(GL_SCISSOR_TEST);glDisable(GL_CULL_FACE);
         // OpenXR interprets RGBA8 as linear light. An sRGB target applies its own transfer
         // encoding; in either case authored sRGB inputs must be decoded before shading.
@@ -504,7 +638,27 @@ public:
                 glBufferData(GL_ARRAY_BUFFER,sizeof(data),data,GL_STREAM_DRAW);glDrawArrays(GL_TRIANGLES,0,6);
             }
         }
-        glDepthMask(GL_TRUE);glBindVertexArray(0);glBindFramebuffer(GL_FRAMEBUFFER,0);
+        glDepthMask(GL_TRUE);glBindVertexArray(0);
+        const GLenum depth = GL_DEPTH_ATTACHMENT;
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &depth);
+        if (msaaFramebuffer) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFramebuffer);
+            glBlitFramebuffer(0, 0, target.width, target.height, 0, 0, target.width, target.height,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            const GLenum color = GL_COLOR_ATTACHMENT0;
+            glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &color);
+            // Submit a draw to the acquired image. Some OpenXR compositors do not see
+            // a blit directly into their shared texture, even when local readback succeeds.
+            glBindFramebuffer(GL_FRAMEBUFFER, output);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glUseProgram(presentProgram);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, resolvedEye);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        // Unbinding finishes the implicit resolve on tile-based GPUs before OpenXR takes the image.
+        glBindFramebuffer(GL_FRAMEBUFFER,0);
     }
     void render(){
         XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};XrFrameState timing{XR_TYPE_FRAME_STATE};XR_CHECK(xrWaitFrame(session,&wait,&timing));
@@ -540,13 +694,13 @@ public:
         if(session&&running){xrRequestExitSession(session);running=false;}
         input.close();
         if(display!=EGL_NO_DISPLAY&&context!=EGL_NO_CONTEXT){
-            for(auto& target:swapchains)if(target.depth)glDeleteRenderbuffers(1,&target.depth);
-            if(framebuffer)glDeleteFramebuffers(1,&framebuffer);
+            deleteEyeFramebuffers();
             if(worldVbo)glDeleteBuffers(1,&worldVbo);if(uiVbo)glDeleteBuffers(1,&uiVbo);
             if(effectsVbo)glDeleteBuffers(1,&effectsVbo);
             if(worldVao)glDeleteVertexArrays(1,&worldVao);if(uiVao)glDeleteVertexArrays(1,&uiVao);
             if(effectsVao)glDeleteVertexArrays(1,&effectsVao);
             if(exhibitProgram)glDeleteProgram(exhibitProgram);
+            if(presentProgram)glDeleteProgram(presentProgram);
             if(uiTexture)glDeleteTextures(1,&uiTexture);if(worldProgram)glDeleteProgram(worldProgram);if(uiProgram)glDeleteProgram(uiProgram);
         }
         for(auto& target:swapchains)if(target.handle)xrDestroySwapchain(target.handle);

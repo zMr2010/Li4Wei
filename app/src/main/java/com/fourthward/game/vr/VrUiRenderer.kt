@@ -173,27 +173,34 @@ data class VrUiState(
 internal data class VrAtlasRegion(val x: Int, val y: Int, val width: Int, val height: Int)
 private typealias Region = VrAtlasRegion
 
-/** Explicit atlas allocations keep a larger route window from colliding with captions or pointer art. */
+// Enlarge the captions in tracking space so even paragraphs fitted to their tile
+// retain their line breaks and get the same increase in apparent type size.
+private const val CAPTION_SCALE = 1.5
+
+/** Tiles start on 8-texel boundaries and have a full gutter texel at the coarsest mip (level 3). */
 internal object VrUiAtlas {
     val angle = Region(0, 0, 300, 72)
-    val comparisons = listOf(Region(320, 0, 340, 72), Region(670, 0, 340, 72))
+    val comparisons = listOf(Region(320, 0, 340, 72), Region(672, 0, 340, 72))
     val tutorial = Region(0, 80, 640, 184)
-    val startTitle = Region(650, 98, 600, 180)
+    val startTitle = Region(656, 88, 600, 180)
     val panel = Region(0, 280, LevelMapWindow.WIDTH_DP, LevelMapWindow.HEIGHT_DP)
-    val buttons = List(12) { Region(620 + (it % 4) * 350, 280 + (it / 4) * 150, 340, 140) } +
-        Region(1550, 768, 340, 140)
-    val pointer = Region(1500, 0, 64, 64)
-    val lesson = Region(620, 768, 900, 240)
-    val yellow = Region(1050, 0, 8, 8)
-    val white = Region(1064, 0, 8, 8)
-    val mint = Region(1078, 0, 8, 8)
-    val base = Region(1050, 16, 8, 8)
-    val bevel = Region(1064, 16, 8, 8)
-    val graphite = Region(1078, 16, 8, 8)
-    val availableRoute = Region(1090, 24, 8, 8)
-    val scan = Region(1100, 0, 128, 16)
-    val glow = Region(1240, 0, 96, 96)
-    val mintGlow = Region(1340, 0, 96, 96)
+    val buttons = List(12) { Region(616 + (it % 4) * 352, 280 + (it / 4) * 152, 340, 140) } +
+        Region(1552, 768, 340, 140)
+    val pointer = Region(1496, 0, 64, 64)
+    val lesson = Region(616, 768, 900, 240)
+    // A one-texel swatch gives all four quad corners the same texel-center UV.
+    // Bevels and subpixel route lines therefore always sample their exact solid color.
+    private fun swatch(x: Int, y: Int) = Region(x, y, 1, 1)
+    val yellow = swatch(1040, 0)
+    val white = swatch(1056, 0)
+    val mint = swatch(1072, 0)
+    val base = swatch(1040, 16)
+    val bevel = swatch(1056, 16)
+    val graphite = swatch(1072, 16)
+    val availableRoute = swatch(1088, 24)
+    val scan = Region(1104, 0, 128, 16)
+    val glow = Region(1272, 0, 96, 96)
+    val mintGlow = Region(1376, 0, 96, 96)
     val all = listOf(angle, tutorial, startTitle, panel, pointer, lesson, yellow, white, mint, base, bevel, graphite, availableRoute, scan, glow, mintGlow) + comparisons + buttons
 }
 
@@ -367,28 +374,35 @@ class VrUiRenderer {
         val captionOffset = -.009 * (1.0 - UiMotionTokens.out((time - captionAt) / .28))
         if (state.panel.groupTitle == null) {
             if (state.lesson == null) {
-                val at = offset(state.headPose, 0.0, -.43 + captionOffset, -1.2)
-                add(tutorialRegion, at, .58, .58 * 184 / 640, captionAlpha)
+                val width = .58 * CAPTION_SCALE
+                val height = width * tutorialRegion.height / tutorialRegion.width
+                val at = offset(state.headPose, 0.0, -.347 - height / 2 + captionOffset, -1.2)
+                add(tutorialRegion, at, width, height, captionAlpha)
                 val age = time - completedAt
                 if (age in 0.0..1.6 && state.tutorial.completed) {
                     val reveal = UiMotionTokens.out(age / .38)
                     val fade = (1.0 - ((age - .75) / .85).coerceIn(0.0, 1.0))
-                    corners(offset(at, 0.0, 0.0, .001), .58 + .018 * reveal,
-                        .58 * 184 / 640 + .012 * reveal, .022 * reveal, fade * .85, mintRegion)
+                    corners(offset(at, 0.0, 0.0, .001), width + .018 * reveal,
+                        height + .012 * reveal, .022 * reveal, fade * .85, mintRegion)
                     // Two fine traces meet in the centre, then settle; the world and camera stay still.
-                    val y = .58 * 184 / 1280 + .009
-                    line(at, -.19, y, -.19 + .19 * reveal, y, .0012, mintRegion, fade)
-                    line(at, .19, y, .19 - .19 * reveal, y, .0012, mintRegion, fade)
+                    val y = height / 2 + .009
+                    val reach = width / 3
+                    line(at, -reach, y, -reach + reach * reveal, y, .0012, mintRegion, fade)
+                    line(at, reach, y, reach - reach * reveal, y, .0012, mintRegion, fade)
                 }
             } else {
                 val modelAnchor = state.lesson.anchorPose?.takeIf { state.lesson.geometryTopic != null || state.lesson.motionTopic != null }
-                val at = if (modelAnchor != null) offset(modelAnchor, 0.0, -.31 + captionOffset, 0.0)
-                    else offset(state.headPose, 0.0, -.34 + captionOffset, -1.35)
-                add(lessonRegion, at, .75, .75 * 240 / 900, captionAlpha)
+                val width = .75 * CAPTION_SCALE
+                val height = width * lessonRegion.height / lessonRegion.width
+                // Keep the top edge below the models. The first three lessons have controls on the right.
+                val at = if (modelAnchor != null) offset(modelAnchor, 0.0, -.21 - height / 2 + captionOffset, 0.0)
+                    else offset(state.headPose, -.17, -.24 - height / 2 + captionOffset, -1.35)
+                add(lessonRegion, at, width, height, captionAlpha)
                 val sweep = ((time - captionAt) / .65).coerceIn(0.0, 1.0)
                 if (sweep < 1.0) {
-                    val extent = .36 * UiMotionTokens.out(sweep)
-                    line(at, -.36, .098, -.36 + extent * 2, .098, .0007, yellowRegion, (1.0 - sweep) * .7)
+                    val left = -.48 * width
+                    val y = height / 2 - .002
+                    line(at, left, y, left + width * .96 * UiMotionTokens.out(sweep), y, .0007, yellowRegion, (1.0 - sweep) * .7)
                 }
             }
             comparisonLabels.forEachIndexed { index, label ->
@@ -633,8 +647,7 @@ class VrUiRenderer {
         val next = if (status.stepIndex == status.stepCount - 1) "开始探索" else "下一步"
         val hint = status.gesture?.hint ?: if (status.animating) "演示结束后可点「$next」" else "可绕着模型观察，准备好后点「$next」"
         Ink.text(c, hint, 22f, 200f, Ink.paint(21f, p.ink, true), 856f)
-        val dock = if (status.geometryTopic == null && status.motionTopic == null) "右侧" else "下方"
-        val controls = if (keyboardMode) "N $next    B 上一步    R 重播" else "对准${dock}按钮，捏合、戳按或停留 2 秒"
+        val controls = if (keyboardMode) "N $next    B 上一步    R 重播" else "对准面板按钮，捏合、戳按或停留 2 秒"
         Ink.text(c, controls, 22f, 227f, Ink.paint(18f, p.muted), 856f)
     }
 
