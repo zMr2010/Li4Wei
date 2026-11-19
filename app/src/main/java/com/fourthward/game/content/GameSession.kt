@@ -123,7 +123,7 @@ class GameSession {
             PalmAction.LEVEL_LIST, PalmAction.BACK, PalmAction.LEVEL_1,
             PalmAction.LEVEL_2, PalmAction.LEVEL_3, PalmAction.LEVEL_4, PalmAction.LEVEL_5, PalmAction.LEVEL_6,
             PalmAction.LEVEL_7, PalmAction.LEVEL_8, PalmAction.LEVEL_9,
-            PalmAction.PREVIOUS_GROUP, PalmAction.NEXT_GROUP -> return // Native OpenXR menu only.
+            PalmAction.PREVIOUS_GROUP, PalmAction.NEXT_GROUP, PalmAction.TOGGLE_THEME -> return // Native OpenXR menu only.
         }
         publish()
         requestRender()
@@ -137,7 +137,7 @@ class GameSession {
             InputCommand.CHOOSE_LEVEL_2, InputCommand.CHOOSE_LEVEL_3, InputCommand.CHOOSE_LEVEL_4,
             InputCommand.CHOOSE_LEVEL_5, InputCommand.CHOOSE_LEVEL_6,
             InputCommand.CHOOSE_LEVEL_7, InputCommand.CHOOSE_LEVEL_8, InputCommand.CHOOSE_LEVEL_9,
-            InputCommand.PREVIOUS_GROUP, InputCommand.NEXT_GROUP -> Unit // Retained legacy Spatial host.
+            InputCommand.PREVIOUS_GROUP, InputCommand.NEXT_GROUP, InputCommand.TOGGLE_THEME -> Unit // Retained legacy Spatial host.
             InputCommand.TOGGLE_DEBUG_PANEL -> handPanel.setDebugVisible(!handPanel.debugVisible)
             InputCommand.RESET_ANGLE -> executeAction(PalmAction.RESET_ANGLE)
             InputCommand.TOGGLE_REFERENCE -> executeAction(PalmAction.TOGGLE_REFERENCE)

@@ -22,7 +22,7 @@ class FourthwardGame(
     val tutorialRouteComplete: Boolean get() = catalog.tutorialIndices.isNotEmpty() &&
         catalog.tutorialIndices.all(progress::isCompleted)
     var motionTimeSeconds: Double = 0.0; private set
-    var motionBlocked: Boolean = false; private set
+    var deathCount: Long = 0; private set
     private var motionObservedSeconds = 0.0
     private var motionWasVisible = false
     private var motionVisitedMiddle = false
@@ -50,8 +50,8 @@ class FourthwardGame(
     val observationHint: String? get() = if (level.motionTopic != null) {
         if (observationsComplete) if (nextLevelUnlocked) "按 N 进入下一课，或按 H 回看并列演示。"
             else "按 N 查看关卡路线，或按 H 回看并列演示。"
-        else if (abs(sin(frame.angleRadians)) > .04) "用「θ归零」回到起初的切片方向，再比较这轮穿行。"
-        else if (abs(frame.signedDistance(Vec4.ZERO)) > .12) "从起点重新观察，可以再看一次物体完整穿过的过程。"
+        else if (abs(sin(frame.angleRadians - level.startAngleRadians)) > .04) "回到起初的切片方向，再比较这轮穿行。"
+        else if (abs(frame.signedDistance(level.start)) > .12) "从起点重新观察，可以再看一次物体完整穿过的过程。"
         else level.hint
     } else level.geometryTopic?.let {
         when {
@@ -99,25 +99,23 @@ class FourthwardGame(
         if (!active || !dt.isFinite() || dt <= 0.0 || (level.motionTopic == null && level.motionPuzzle == null)) return false
         val duration = dt.coerceAtMost(.1)
         val steps = max(1, ceil(duration / .02).toInt())
+        val step = duration / steps
         var changed = false
-        motionBlocked = false
         repeat(steps) {
-            if (!motionBlocked) {
-                val nextTime = if (level.motionPuzzle != null)
-                    MotionPuzzles.advanceTime(level, motionTimeSeconds, duration / steps, completedCheckpointIds)
-                    else motionTimeSeconds + duration / steps
-                val next = animatedWorldAt(nextTime)
-                if (nextTime > motionTimeSeconds && next != null) {
-                    if (movingSolidsTouchPlayer(world, next)) motionBlocked = true
-                    else {
-                        motionTimeSeconds = nextTime
-                        animatedWorld = next
-                        changed = true
-                        if (level.motionTopic != null) observeMotion(duration / steps)
-                        checkCompletion()
-                    }
-                }
+            val nextTime = if (level.motionPuzzle != null)
+                MotionPuzzles.advanceTime(level, motionTimeSeconds, step, completedCheckpointIds)
+                else motionTimeSeconds + step
+            if (nextTime <= motionTimeSeconds) return changed
+            val next = animatedWorldAt(nextTime) ?: return changed
+            if (movingHazardsTouchPlayer(world, next)) {
+                die()
+                return true
             }
+            motionTimeSeconds = nextTime
+            animatedWorld = next
+            changed = true
+            if (level.motionTopic != null) observeMotion(step)
+            checkCompletion()
         }
         return changed
     }
@@ -133,7 +131,8 @@ class FourthwardGame(
         val phase = motionTimeSeconds % MotionStudies.passageSeconds / MotionStudies.passageSeconds
         // Free X/W walking and head motion preserve this plane. Changing the section is
         // allowed too, but cannot masquerade as the source object's taught motion.
-        val referencePlane = abs(sin(frame.angleRadians)) <= .04 && abs(frame.signedDistance(Vec4.ZERO)) <= .12
+        val referencePlane = abs(sin(frame.angleRadians - level.startAngleRadians)) <= .04 &&
+            abs(frame.signedDistance(level.start)) <= .12
         val small: Boolean
         val central: Boolean
         if (level.motionTopic == MotionTopic.MOVING_BOX) {
@@ -162,9 +161,11 @@ class FourthwardGame(
         }
     }
 
-    private fun movingSolidsTouchPlayer(before: World4, after: World4): Boolean {
+    private fun movingHazardsTouchPlayer(before: World4, after: World4): Boolean {
+        val hazards = after.boxes.filter { MotionPuzzles.isHazard(level.motionPuzzle, it) }
+        if (hazards.isEmpty()) return false
         val old = before.boxes.associateBy { it.id }
-        return after.boxes.filter { it.solid }.any { box ->
+        return hazards.any { box ->
             val previous = old[box.id] ?: box
             val delta = box.center - previous.center
             if (delta.lengthSquared() < 1e-20) false else {
@@ -210,15 +211,23 @@ class FourthwardGame(
             return true
         }
         val steps = max(1, ceil(abs(delta) / (PI / 180.0)).toInt())
+        val feet = feet(trackedHead)
         var changed = false
         repeat(steps) {
-            if (!lastMotionBlocked) {
-                val candidate = frame.rotated(delta / steps, trackedHead)
-                if (canOccupy(candidate, feet(trackedHead))) {
-                    frame = candidate
-                    changed = true
-                } else lastMotionBlocked = true
+            val candidate = frame.rotated(delta / steps, trackedHead)
+            val contacts = solidSections(candidate).filter { occupied(it, feet, trackedHead) }
+            if (candidate.world(feet).z < -1e-9 || candidate.world(trackedHead).z < playerHeadRadius ||
+                contacts.any { !it.isHazard() }) {
+                lastMotionBlocked = true
+                checkCompletion()
+                return changed
             }
+            if (contacts.isNotEmpty()) {
+                die()
+                return true
+            }
+            frame = candidate
+            changed = true
         }
         checkCompletion()
         return changed
@@ -256,11 +265,13 @@ class FourthwardGame(
             val step = requestedStep.copy(y = max(requestedStep.y, minimumY.coerceAtMost(0.0)))
             if (step.y > requestedStep.y + 1e-12) lastMotionBlocked = true
             if (step.lengthSquared() <= 1e-24) break
-            val sections = solidSections(frame)
-            if (sweepBlocked(sections, start, start + step) ||
-                headSweepBlocked(sections, trackedHead, trackedHead + step)) {
+            val (hazards, walls) = solidSections(frame).partition { it.isHazard() }
+            if (sweepBlocked(walls, start, start + step) ||
+                headSweepBlocked(walls, trackedHead, trackedHead + step)) {
                 lastMotionBlocked = true; break
             }
+            if (sweepBlocked(hazards, start, start + step) ||
+                headSweepBlocked(hazards, trackedHead, trackedHead + step)) return die()
             frame = SliceFrame(frame.angleRadians,
                 frame.origin + frame.right * step.x + frame.up * step.y + frame.forward * step.z)
             changed = true
@@ -305,25 +316,31 @@ class FourthwardGame(
         val start = feet(trackedHead)
         val delta = localHead - trackedHead
         val horizontal = Vec3(delta.x, 0.0, delta.z)
-        val sections = solidSections(frame)
+        val (hazards, walls) = solidSections(frame).partition { it.isHazard() }
         // Keep the existing horizontal response: contact with a wall must still allow a
         // clear crouch/stand movement instead of scaling away all raw vertical motion.
         val bodyFraction = safePhysicalFraction(horizontal) { fraction ->
-            sweepBlocked(sections, start, start + horizontal * fraction)
+            sweepBlocked(walls, start, start + horizontal * fraction)
         }
         val headDelta = horizontal * bodyFraction + Vec3(0.0, delta.y, 0.0)
         val startHeight = bodyHeight(trackedHead)
         val headFraction = safePhysicalFraction(headDelta) { fraction ->
             val nextHead = trackedHead + headDelta * fraction
             frame.world(nextHead).z <= playerHeadRadius ||
-                headSweepBlocked(sections, trackedHead, nextHead) || sections.any {
+                headSweepBlocked(walls, trackedHead, nextHead) || walls.any {
                 SliceGeometry.intersectsSweptCapsule(it, start, start + horizontal * (bodyFraction * fraction),
                     playerRadius, startHeight, bodyHeight(nextHead))
             }
         }
+        val accepted = headDelta * headFraction
+        val endHead = trackedHead + accepted
+        val endFeet = start + accepted.copy(y = 0.0)
+        if (headSweepBlocked(hazards, trackedHead, endHead) || hazards.any {
+                SliceGeometry.intersectsSweptCapsule(it, start, endFeet, playerRadius, startHeight, bodyHeight(endHead))
+            }) return die(localHead)
         physicalContact = bodyFraction < 1.0 || headFraction < 1.0
         if (physicalContact) {
-            val rejected = delta - headDelta * headFraction
+            val rejected = delta - accepted
             frame = SliceFrame(frame.angleRadians, frame.origin - frame.right * rejected.x -
                 frame.up * rejected.y - frame.forward * rejected.z)
             physicalVerticalCorrection -= rejected.y
@@ -332,6 +349,12 @@ class FourthwardGame(
         lastMotionBlocked = physicalContact
         checkCompletion()
         return MotionResult(changed, physicalContact, completed)
+    }
+
+    private fun die(localHead: Vec3? = null): MotionResult {
+        deathCount++
+        restartLevel(localHead)
+        return MotionResult(true, false, completed)
     }
 
     /** A lesson may have moved the user freely. Adopt its final raw pose directly instead
@@ -344,15 +367,15 @@ class FourthwardGame(
         }
         observationEyeHeight = trackedHead.y
         physicalVerticalCorrection = 0.0
-        frame = if (locomotionLocked) fixedObservationFrame(0.0) else
-            SliceFrame(0.0, level.start - Vec4.X * trackedHead.x - Vec4.W * trackedHead.z)
+        val startBasis = SliceFrame(level.startAngleRadians)
+        frame = if (locomotionLocked) fixedObservationFrame(startBasis.angleRadians) else
+            SliceFrame(startBasis.angleRadians, level.start - startBasis.right * trackedHead.x - startBasis.forward * trackedHead.z)
         completed = false
         physicalContact = false
         lastMotionBlocked = false
         observationStep = 0
         observationHoldSeconds = 0.0
         motionTimeSeconds = 0.0
-        motionBlocked = false
         motionObservedSeconds = 0.0
         motionWasVisible = false
         motionVisitedMiddle = false
@@ -386,7 +409,6 @@ class FourthwardGame(
             basis.right * trackedHead.x - basis.forward * trackedHead.z)
         motionTimeSeconds = checkpoint.motionTime
         animatedWorld = animatedWorldAt(motionTimeSeconds)
-        motionBlocked = false
         physicalContact = !fitInitialEyeHeight()
         lastMotionBlocked = physicalContact
         hintTier = 0
@@ -472,9 +494,7 @@ class FourthwardGame(
     }
 
     private fun solidSections(candidate: SliceFrame): List<BoxSection> = world.boxes.filter { it.solid }.mapNotNull { SliceGeometry.sliceBox(it, candidate) }
-    private fun canOccupy(candidate: SliceFrame, feet: Vec3): Boolean = solidSections(candidate).none {
-        occupied(it, feet, trackedHead)
-    } && candidate.world(feet).z >= -1e-9 && candidate.world(trackedHead).z >= playerHeadRadius
+    private fun BoxSection.isHazard(): Boolean = MotionPuzzles.isHazard(level.motionPuzzle, source)
     private fun sweepBlocked(sections: List<BoxSection>, start: Vec3, end: Vec3): Boolean = sections.any {
         SliceGeometry.intersectsSweptCapsule(it, start, end, playerRadius, bodyHeight(trackedHead))
     }

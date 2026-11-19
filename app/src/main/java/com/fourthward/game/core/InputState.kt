@@ -10,7 +10,7 @@ enum class InputCommand {
     PREVIOUS_LESSON_STEP, OPEN_LESSON,
     TOGGLE_LEVEL_LIST, BACK, CHOOSE_LEVEL_1, CHOOSE_LEVEL_2, CHOOSE_LEVEL_3,
     CHOOSE_LEVEL_4, CHOOSE_LEVEL_5, CHOOSE_LEVEL_6,
-    CHOOSE_LEVEL_7, CHOOSE_LEVEL_8, CHOOSE_LEVEL_9, PREVIOUS_GROUP, NEXT_GROUP,
+    CHOOSE_LEVEL_7, CHOOSE_LEVEL_8, CHOOSE_LEVEL_9, PREVIOUS_GROUP, NEXT_GROUP, TOGGLE_THEME,
 }
 
 enum class InputKey {
@@ -18,7 +18,7 @@ enum class InputKey {
     MENU, RESET, REFERENCE, RESTART, NEXT_LEVEL, SELECT, ACTIVATE,
     PREVIOUS_STEP, LESSON,
     LEVEL_LIST, BACK, LEVEL_1, LEVEL_2, LEVEL_3,
-    LEVEL_4, LEVEL_5, LEVEL_6, LEVEL_7, LEVEL_8, LEVEL_9, PREVIOUS_GROUP, NEXT_GROUP,
+    LEVEL_4, LEVEL_5, LEVEL_6, LEVEL_7, LEVEL_8, LEVEL_9, PREVIOUS_GROUP, NEXT_GROUP, THEME,
 }
 
 data class InputFrame(
@@ -106,6 +106,7 @@ class InputState(
             InputKey.LEVEL_9 -> InputCommand.CHOOSE_LEVEL_9
             InputKey.PREVIOUS_GROUP -> InputCommand.PREVIOUS_GROUP
             InputKey.NEXT_GROUP -> InputCommand.NEXT_GROUP
+            InputKey.THEME -> InputCommand.TOGGLE_THEME
             else -> null
         }
         // Shift+Tab is a navigation chord, not a request to descend while choosing a button.

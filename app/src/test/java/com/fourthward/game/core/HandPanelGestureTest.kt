@@ -10,11 +10,11 @@ class HandPanelGestureTest {
     private val head = Vec3(0.0, 0.06, 0.60)
     private fun openHand() = HandLandmarks(
         wrist = Vec3.ZERO, palm = Vec3(0.0, 0.032, 0.0),
-        thumb = FingerLandmarks(Vec3(-0.025, 0.014, 0.0), Vec3(-0.047, 0.030, 0.0), Vec3(-0.078, 0.057, 0.0), Vec3(-0.063, 0.045, 0.0)),
-        index = FingerLandmarks(Vec3(-0.026, 0.065, 0.0), Vec3(-0.029, 0.095, 0.0), Vec3(-0.033, 0.130, 0.0), Vec3(-0.031, 0.113, 0.0)),
-        middle = FingerLandmarks(Vec3(-0.006, 0.070, 0.0), Vec3(-0.006, 0.105, 0.0), Vec3(-0.006, 0.145, 0.0), Vec3(-0.006, 0.128, 0.0)),
-        ring = FingerLandmarks(Vec3(0.014, 0.065, 0.0), Vec3(0.016, 0.095, 0.0), Vec3(0.019, 0.132, 0.0), Vec3(0.018, 0.116, 0.0)),
-        little = FingerLandmarks(Vec3(0.032, 0.052, 0.0), Vec3(0.038, 0.078, 0.0), Vec3(0.044, 0.106, 0.0), Vec3(0.041, 0.094, 0.0)),
+        thumb = FingerLandmarks(Vec3(0.025, 0.014, 0.0), Vec3(0.047, 0.030, 0.0), Vec3(0.078, 0.057, 0.0), Vec3(0.063, 0.045, 0.0)),
+        index = FingerLandmarks(Vec3(0.026, 0.065, 0.0), Vec3(0.029, 0.095, 0.0), Vec3(0.033, 0.130, 0.0), Vec3(0.031, 0.113, 0.0)),
+        middle = FingerLandmarks(Vec3(0.006, 0.070, 0.0), Vec3(0.006, 0.105, 0.0), Vec3(0.006, 0.145, 0.0), Vec3(0.006, 0.128, 0.0)),
+        ring = FingerLandmarks(Vec3(-0.014, 0.065, 0.0), Vec3(-0.016, 0.095, 0.0), Vec3(-0.019, 0.132, 0.0), Vec3(-0.018, 0.116, 0.0)),
+        little = FingerLandmarks(Vec3(-0.032, 0.052, 0.0), Vec3(-0.038, 0.078, 0.0), Vec3(-0.044, 0.106, 0.0), Vec3(-0.041, 0.094, 0.0)),
     )
 
     private fun curled(finger: FingerLandmarks) = finger.copy(
@@ -76,7 +76,7 @@ class HandPanelGestureTest {
 
     @Test fun extendedFingersWithTuckedThumbAreNotAnOpenFiveFingerHand() {
         val hand = openHand()
-        val tucked = hand.copy(thumb = FingerLandmarks(Vec3(-0.025, 0.014, 0.0), Vec3(-0.016, 0.029, 0.0), Vec3(0.0, 0.055, 0.0)))
+        val tucked = hand.copy(thumb = FingerLandmarks(Vec3(0.025, 0.014, 0.0), Vec3(0.016, 0.029, 0.0), Vec3(0.0, 0.055, 0.0)))
         val state = HandPanelGesture().update(tucked, head, 0.05)
         assertTrue(state.validTracking)
         assertFalse(state.isOpen)
@@ -84,7 +84,7 @@ class HandPanelGestureTest {
 
     @Test fun hookedFingerCannotPassJustBecauseItsTipIsFarFromWrist() {
         val hand = openHand()
-        val hooked = hand.index.copy(knuckle = Vec3(-0.026, 0.110, 0.0), distal = Vec3(-0.026, 0.125, 0.025), tip = Vec3(-0.026, 0.105, 0.055))
+        val hooked = hand.index.copy(knuckle = Vec3(0.026, 0.110, 0.0), distal = Vec3(0.026, 0.125, 0.025), tip = Vec3(0.026, 0.105, 0.055))
         assertFalse(HandPanelGesture().update(hand.copy(index = hooked), head, 0.05).isOpen)
     }
 

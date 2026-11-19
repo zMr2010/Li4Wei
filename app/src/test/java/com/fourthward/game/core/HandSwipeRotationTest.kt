@@ -14,11 +14,11 @@ class HandSwipeRotationTest {
     private fun finger(base: Vec3, tip: Vec3) = FingerLandmarks(base, base + (tip - base) * 0.45, tip, base + (tip - base) * 0.75)
     private fun backFacingHand() = HandLandmarks(
         wrist = Vec3.ZERO, palm = Vec3(0.0, 0.035, 0.0),
-        thumb = finger(Vec3(0.025, 0.014, 0.0), Vec3(0.078, 0.057, 0.0)),
-        index = finger(Vec3(0.026, 0.065, 0.0), Vec3(0.033, 0.130, 0.0)),
-        middle = finger(Vec3(0.006, 0.070, 0.0), Vec3(0.006, 0.145, 0.0)),
-        ring = finger(Vec3(-0.014, 0.065, 0.0), Vec3(-0.019, 0.132, 0.0)),
-        little = finger(Vec3(-0.032, 0.052, 0.0), Vec3(-0.044, 0.106, 0.0)),
+        thumb = finger(Vec3(-0.025, 0.014, 0.0), Vec3(-0.078, 0.057, 0.0)),
+        index = finger(Vec3(-0.026, 0.065, 0.0), Vec3(-0.033, 0.130, 0.0)),
+        middle = finger(Vec3(-0.006, 0.070, 0.0), Vec3(-0.006, 0.145, 0.0)),
+        ring = finger(Vec3(0.014, 0.065, 0.0), Vec3(0.019, 0.132, 0.0)),
+        little = finger(Vec3(0.032, 0.052, 0.0), Vec3(0.044, 0.106, 0.0)),
     )
 
     private fun transform(hand: HandLandmarks, point: (Vec3) -> Vec3, vector: (Vec3) -> Vec3 = { it }): HandLandmarks {
@@ -82,7 +82,7 @@ class HandSwipeRotationTest {
     @Test fun mirroredLeftHandWithAnatomicalNormalMatchesRightHandSwipeDirection() {
         val rightHand = backFacingHand()
         val mirrored = transform(rightHand, { Vec3(-it.x, it.y, it.z) })
-        val leftHand = mirrored.copy(palmNormal = (mirrored.index.base - mirrored.wrist).cross(mirrored.little.base - mirrored.wrist))
+        val leftHand = mirrored.copy(palmNormal = mirrored.palmNormalFromJoints(isLeft = true))
         // This is genuinely opposite chirality: the implicit right-hand normal would reject it.
         val wrongChirality = HandSwipeRotation()
         repeat(10) { assertFalse(wrongChirality.update(mirrored, camera, right, 0.05).active) }
@@ -103,7 +103,7 @@ class HandSwipeRotationTest {
 
     @Test fun leftPalmFacingCameraIsRejectedAndImmediatelyStopsAnActiveSwipe() {
         val mirrored = transform(backFacingHand(), { Vec3(-it.x, it.y, it.z) })
-        val leftBack = mirrored.copy(palmNormal = (mirrored.index.base - mirrored.wrist).cross(mirrored.little.base - mirrored.wrist))
+        val leftBack = mirrored.copy(palmNormal = mirrored.palmNormalFromJoints(isLeft = true))
         fun turnTowardCamera(point: Vec3) = Vec3(-point.x, point.y, -point.z)
         val leftFront = transform(leftBack, ::turnTowardCamera, ::turnTowardCamera)
         assertTrue(leftBack.palmNormal!!.z < 0.0)

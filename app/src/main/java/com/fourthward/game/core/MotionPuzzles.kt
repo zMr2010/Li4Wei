@@ -22,12 +22,14 @@ object MotionPuzzles {
         require(currentTime.isFinite() && currentTime >= 0.0 && delta.isFinite() && delta >= 0.0)
         val next = currentTime + delta
         if (level.motionPuzzle != MotionPuzzle.FOLLOW_LIGHT) return next
-        val limit = when {
-            "light-amber" !in completedIds -> 6.0
-            "light-cyan" !in completedIds -> 14.0
-            else -> 15.5
-        }
+        val limit = if ("light-amber" in completedIds) 15.5 else 6.0
         return next.coerceAtMost(limit)
+    }
+
+    internal fun isHazard(puzzle: MotionPuzzle?, box: Box4): Boolean = box.solid && when (puzzle) {
+        MotionPuzzle.DRIFTING_PASSAGE -> box.id == "drifting-block"
+        MotionPuzzle.STAGGERED_GATES -> box.id.startsWith("moving-gate-")
+        else -> false
     }
 
     fun world(level: TutorialLevel, timeSeconds: Double, completedCheckpointIds: Set<String>): World4 {
@@ -75,21 +77,16 @@ object MotionPuzzles {
         val room = Bounds(-1.2, 3.6, -1.0, 2.6, -7.0, .9)
         val nodes = listOf(
             checkpoint("light-amber", "金色停靠点", Vec4(0.0, 1.4, 0.0, -2.8), amber),
-            checkpoint("light-cyan", "青色停靠点", Vec4(2.4, 1.4, 0.0, -5.4), cyan),
         )
         val mission = ExpeditionDefinition(nodes, true, listOf(
             stage("跟随光球，找到它停留的金色门廊。",
                 "光暂时离开了你的截面，仍在同一个空间里移动。",
                 "转动切片寻找光；它会在门后等你靠近。",
                 "转到 90°，向右约 1.4 米，再向前穿过金色门廊。"),
-            stage("光球再次出发，跟上它进入青色门廊。",
+            stage("跟随光球穿过青色门廊，走向出口旗帜。",
                 "观察光球离开时的方向，再换一个截面寻找它。",
-                "在中间房间转向，找到右侧的青色标记。",
-                "回到 0°，向右约 2.4 米，再向前穿过青色门廊。"),
-            stage("沿光球指引的方向走到出口。",
-                "光球的最后一次停留就在出口。",
-                "从青色门廊继续向前。",
-                "沿当前通道再向前约 0.8 米，抵达出口标记。"),
+                "在中间房间转向，找到右侧的青色门廊。",
+                "回到 0°，向右约 2.4 米，穿过青色门廊后直走到出口。"),
         ))
         val walls = shell(room) + gate("light-amber-wall", room, -1.8, 0.0, 1.4) +
             gate("light-cyan-wall", room, -4.6, 2.4, 1.4) +
@@ -102,16 +99,11 @@ object MotionPuzzles {
 
     private fun driftingPassage(): TutorialLevel {
         val room = Bounds(-1.3, 1.3, -1.2, 2.8, -5.8, .9)
-        val nodes = listOf(checkpoint("drift-past", "通道另一侧", Vec4(0.0, 0.0, 0.0, -3.4), cyan))
-        val mission = ExpeditionDefinition(nodes, true, listOf(
-            stage("观察漂游体的节奏，穿过它让出的通道。",
+        val mission = ExpeditionDefinition(emptyList(), true, listOf(
+            stage("趁漂游体离开时穿过通道，走到出口旗帜。",
                 "挡路的物体会沿另一个方向来回运动。",
-                "在门前稍等，观察它的截面退去，再走向青色标记。",
-                "保持 0°，在隔墙前等待开口出现，向前穿过；门后的青色标记距起点约 3.4 米。"),
-            stage("穿过漂游体后，沿通道抵达出口。",
-                "出口位于通道尽头。",
-                "保持在青色标记所在的通道中继续向前。",
-                "再向前约 1.6 米，抵达出口标记。"),
+                "在门前等它让出开口，再穿过隔墙。接触漂游体会回到起点。",
+                "保持 0°，等开口出现后向前穿过，沿通道走到约 5 米处的出口。"),
         ))
         val tilt = PI / 12.0
         val blocker = Box4("drifting-block", Vec4(0.0, 0.0, 1.15, -2.5),

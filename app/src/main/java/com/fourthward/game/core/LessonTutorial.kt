@@ -10,6 +10,15 @@ data class LessonBox(val id: String, val center: Vec3, val halfExtents: Vec3)
 
 data class LessonKeyframe(val character: Vec3, val angleRadians: Double = 0.0)
 
+enum class LessonGesture(val hint: String) {
+    WALK("面向目标，伸手抓握再回拉。拉得越远走得越远，回拉时转头可转向。"),
+    ROTATE_RIGHT("前伸右手并张掌，掌心向前。向右横移增大切片角度，对应 E。"),
+    ROTATE_LEFT("前伸右手并张掌，掌心向前。向左横移减小切片角度，对应 Q。"),
+    ROTATE("前伸右手并张掌，掌心向前。左移对应 Q，右移对应 E。"),
+    ROTATE_THEN_WALK("前伸右手张掌，掌心向前，横移转动切片。面向目标，抓握回拉前进。"),
+    PANEL("任一手张开，掌心朝自己或朝上保持 3 秒开面板。把手伸到面板前，握拳关闭。"),
+}
+
 data class LessonStep(
     val id: String,
     val title: String,
@@ -22,6 +31,12 @@ data class LessonStep(
     val goalReachedAtEnd: Boolean = false,
     val fromMotionSeconds: Double = 0.0,
     val toMotionSeconds: Double = fromMotionSeconds,
+    val gesture: LessonGesture? = when {
+        to.angleRadians > from.angleRadians -> LessonGesture.ROTATE_RIGHT
+        to.angleRadians < from.angleRadians -> LessonGesture.ROTATE_LEFT
+        to.character != from.character -> LessonGesture.WALK
+        else -> null
+    },
 ) {
     init {
         require(id.matches(Regex("[a-z][a-z0-9_]*")))
@@ -151,19 +166,21 @@ object LessonTutorials {
             LessonStep(
                 id = "l1_plane",
                 title = "它生活在一个平面里",
-                narration = "先看看这张竖着的平面。对这个小人来说，它就是整个世界。它只能在平面里活动。你可以走到模型侧面，看看它的世界有多薄。",
+                gesture = LessonGesture.PANEL,
+                narration = "看这张竖着的平面，它就是小人的整个世界。你可以走到侧面看一看。想打开面板，张开任一只手，掌心朝向自己或朝上，保持三秒。对准按钮，捏合拇指和食指，再松开，就能点击。也可以用食指轻轻戳一下。",
                 durationSeconds = 0.0, from = pose(start),
             ),
             LessonStep(
                 id = "l1_walk",
                 title = "沿着平面走到终点",
-                narration = "终点就在同一个平面里。这次很简单，顺着这个方向走过去，就到了。你可以再观察一会儿。看清楚了，我们再继续。",
+                narration = "终点和小人在同一个平面里，顺着这个方向走就能到达。进入游戏后，你也可以这样直走。面向目标，向前伸手，抓住，再把手向胸前拉回来。回拉越远，就走得越远。回拉时转头，就能转向。",
                 durationSeconds = 2.4, from = pose(start), to = pose(goal), goalReachedAtEnd = true,
             ),
             LessonStep(
                 id = "l1_ready",
                 title = "轮到你在三维切片中移动",
-                narration = "现在轮到你了。进入游戏后，你会站在四维世界的一张三维切片里。第一关先试着走一走，找到青色旗帜。准备好了，就点开始探索。",
+                gesture = LessonGesture.WALK,
+                narration = "准备好了，就点开始探索。进入游戏后，你会站在四维世界的一张三维切片里。试着面向青色旗帜，抓握回拉，走到旗帜旁。想关闭面板，把任一只手伸到面板前，握一下拳就行。",
                 durationSeconds = 0.0, from = pose(goal), pathBefore = listOf(start, goal), goalReachedAtEnd = true,
             ),
         )),
@@ -177,7 +194,7 @@ object LessonTutorials {
             LessonStep(
                 id = "l2_rotate",
                 title = "只增加一个旋转角度",
-                narration = "先让小人留在原地，再绕着穿过它的竖直线，把平面转过来。看，终点出现了。变的是平面的方向，小人还在刚才的位置。",
+                narration = "小人站在原地，平面绕着穿过它的竖直线转动。看，终点出现了。你要转动切片时，向前伸出右手，张开手掌，掌心向前，手背朝自己。保持这个姿势，手向左平移，角度就会减小。向右平移，角度就会增大。",
                 durationSeconds = 2.0, from = pose(start), to = pose(start, quarter),
             ),
             LessonStep(
@@ -189,6 +206,7 @@ object LessonTutorials {
             LessonStep(
                 id = "l2_ready",
                 title = "用一个角度探索第四维",
+                gesture = LessonGesture.ROTATE_THEN_WALK,
                 narration = "你的三维切片，也只有这一个旋转角度。第二关试着转动切片，找到金色旗帜，再走过去。转头只是四处看看，转动切片要用手势，或者键盘上的 Q 和 E。",
                 durationSeconds = 0.0, from = pose(sideGoal, quarter), pathBefore = listOf(start, sideGoal), goalReachedAtEnd = true,
             ),
@@ -245,6 +263,7 @@ object LessonTutorials {
             LessonStep(
                 id = "l3_ready",
                 title = "三维中的封闭，也可以从四维绕过",
+                gesture = LessonGesture.ROTATE_THEN_WALK,
                 narration = "接下来，把刚才的平面想成你的三维切片，把外面的空间想成四维空间。道理是一样的。第三关有六面墙，把终点完全围住。试着转动切片，走到墙外，再从另一个方向回到里面。",
                 durationSeconds = 0.0, from = pose(goal, quarter), pathBefore = listOf(start, blocked, outside, aligned, goal), goalReachedAtEnd = true,
             ),
@@ -272,6 +291,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l4_ready", title = "寻找超球的不同截面",
+                gesture = LessonGesture.ROTATE,
                 narration = "现在由你来试试。依次把切片转到零度、四十五度和一百三十五度，每个方向停下来看看。把眼前球体的变化，和刚才左边圆片的变化对应起来：切片经过的位置，决定了你能看到的截面。",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO, PI / 4),
             ),
@@ -294,6 +314,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l5_ready", title = "用三个方向认识同一个物体",
+                gesture = LessonGesture.ROTATE,
                 narration = "轮到你了。依次观察零度、四十五度和九十度。先记住截面的宽、高和前后深度，再比较旋转后哪些长度变了。想一想，左边长方形变宽的原因，能不能解释眼前长方体的变化？",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO, PI / 2),
             ),
@@ -316,6 +337,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l6_ready", title = "比较截面，找出隐藏的差别",
+                gesture = LessonGesture.ROTATE,
                 narration = "现在比较眼前的两个物体。零度时，先记住它们相同的截面。转到四十五度，再转到九十度，看看差别从哪里出现。试着根据这些不同方向的截面，判断它们在原来看不见的方向上有什么不同。",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO, PI / 2),
             ),
@@ -338,6 +360,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l10_motion_ready", title = "观察一次完整的穿行",
+                gesture = LessonGesture.WALK,
                 narration = "接下来，观察眼前四维球的往返运动。先保持切片方向，留意截面出现的位置、最大的时候，以及消失的过程。你也可以走到侧面看一看，再想想左边那个球穿过平面的样子。",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO), fromMotionSeconds = 3.0,
             ),
@@ -360,6 +383,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l11_motion_ready", title = "同时追踪位置与大小",
+                gesture = LessonGesture.ROTATE,
                 narration = "现在轮到你观察。先看截面从哪里出现，又往哪里移动，再看看它何时最大、何时消失。可以从不同位置观察，也可以转动切片，比较同一条运动路线在不同方向上的样子。",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO), fromMotionSeconds = 3.0,
             ),
@@ -382,6 +406,7 @@ object LessonTutorials {
             ),
             LessonStep(
                 id = "l12_motion_ready", title = "从运动中辨认形状",
+                gesture = LessonGesture.WALK,
                 narration = "去比较这两种移动的盒体吧。先看上方截面的棱数怎样改变，再跟踪下方长方体的位置。你可以走到侧面观察它们的厚度，把眼前的立体变化和左边平面里的多边形联系起来。",
                 durationSeconds = 0.0, from = pose(Vec3.ZERO), fromMotionSeconds = 3.0,
             ),

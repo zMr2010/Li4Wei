@@ -9,8 +9,8 @@ data class FingerLandmarks(
     val distal: Vec3? = null,
 )
 
-/** Right-hand joints and head position must share one coordinate system, normally stage space.
- * [palmNormal], when supplied, points OUT of the palmar surface, not the back of the hand.
+/** Hand joints and head position must share one coordinate system, normally stage space.
+ * [palmNormal] points out of the palmar surface. Supply it for left hands.
  * A still hand is not stale: populate [sampleAgeSeconds] only from actual sample timing. */
 data class HandLandmarks(
     val wrist: Vec3,
@@ -22,7 +22,16 @@ data class HandLandmarks(
     val little: FingerLandmarks,
     val palmNormal: Vec3? = null,
     val sampleAgeSeconds: Double = 0.0,
-)
+) {
+    /** Outward palm normal from the wrist and MCPs in a right-handed tracking space. */
+    fun palmNormalFromJoints(isLeft: Boolean): Vec3 {
+        val toIndex = index.base - wrist
+        val toLittle = little.base - wrist
+        return if (isLeft) toLittle.cross(toIndex) else toIndex.cross(toLittle)
+    }
+}
+
+enum class HandSurface(val normalSign: Double) { PALM(1.0), BACK(-1.0) }
 
 data class HandPanelGestureConfig(
     val showSeconds: Double = 0.15,
@@ -30,6 +39,8 @@ data class HandPanelGestureConfig(
     val staleAfterSeconds: Double = 0.12,
     val facingEnterDot: Double = 0.65,
     val facingExitDot: Double = 0.50,
+    val facingSurface: HandSurface = HandSurface.PALM,
+    val allowFacingUp: Boolean = false,
 ) {
     init {
         require(showSeconds.isFinite() && showSeconds >= 0.0)
@@ -46,10 +57,13 @@ data class HandPanelGestureState(
     val validTracking: Boolean = false,
     val facingDot: Double = 0.0,
     val palmNormal: Vec3? = null,
-)
+    val isFacingUp: Boolean = false,
+) {
+    val isPanelPose: Boolean get() = isOpen && (isFacingHead || isFacingUp)
+}
 
-/** Five extended fingers + right palm facing the head. This controls visibility only;
- * left-hand pointing/clicking belongs to the UI input adapter, not this predicate. */
+/** Classifies the selected hand surface against the head direction and optionally stage up.
+ * The reported palm normal always points out of the anatomical palm. */
 class HandPanelGesture(private val config: HandPanelGestureConfig = HandPanelGestureConfig()) {
     private var visible = false
     private var showElapsed = 0.0
@@ -69,16 +83,14 @@ class HandPanelGesture(private val config: HandPanelGestureConfig = HandPanelGes
         val fingers = listOf(hand.thumb, hand.index, hand.middle, hand.ring, hand.little)
         if (!hand.wrist.finite() || !hand.palm.finite() || fingers.any { !it.finite() }) return trackingLost()
 
-        val across = hand.index.base - hand.little.base // Toward the thumb side of this RIGHT hand.
+        val across = hand.index.base - hand.little.base // Toward the thumb side.
         val along = hand.middle.base - hand.wrist
         val width = across.length()
         val palmLength = along.length()
         val scale = (width + palmLength) * 0.5
         if (!scale.isFinite() || scale <= 1e-6 || width < 0.20 * scale || palmLength < 0.20 * scale) return trackingLost()
 
-        // Canonical right palm facing +Z: wrist=(0,0,0), index=(-a,b,0), little=(a,b,0).
-        // little×index points +Z. Reversing this sign would accept the back of the hand.
-        val anatomicalNormal = (hand.little.base - hand.wrist).cross(hand.index.base - hand.wrist)
+        val anatomicalNormal = hand.palmNormalFromJoints(isLeft = false)
         if (anatomicalNormal.length() <= scale * scale * 0.02) return trackingLost()
         val normal = (hand.palmNormal ?: anatomicalNormal).unitOrNull() ?: return trackingLost()
         val toHead = (headPosition - hand.palm).unitOrNull() ?: return trackingLost()
@@ -94,10 +106,13 @@ class HandPanelGesture(private val config: HandPanelGestureConfig = HandPanelGes
         val open = listOf(hand.index, hand.middle, hand.ring, hand.little).all {
             extendedFinger(it, hand.wrist, longitudinal, scale, relaxed)
         } && extendedThumb(hand.thumb, hand.index.base, hand.wrist, thumbward, scale, relaxed)
-        val facingDot = normal.dot(toHead).coerceIn(-1.0, 1.0)
-        val facing = facingDot >= if (relaxed) config.facingExitDot else config.facingEnterDot
+        val surfaceNormal = normal * config.facingSurface.normalSign
+        val facingDot = surfaceNormal.dot(toHead).coerceIn(-1.0, 1.0)
+        val threshold = if (relaxed) config.facingExitDot else config.facingEnterDot
+        val facing = facingDot >= threshold
+        val upward = config.allowFacingUp && surfaceNormal.y >= threshold
 
-        if (open && facing) {
+        if (open && (facing || upward)) {
             hideElapsed = 0.0
             showElapsed += elapsed
             if (showElapsed + 1e-9 >= config.showSeconds) visible = true
@@ -106,7 +121,7 @@ class HandPanelGesture(private val config: HandPanelGestureConfig = HandPanelGes
             hideElapsed += elapsed
             if (hideElapsed + 1e-9 >= config.hideSeconds) visible = false
         }
-        return HandPanelGestureState(visible, open, facing, true, facingDot, normal)
+        return HandPanelGestureState(visible, open, facing, true, facingDot, normal, upward)
     }
 
     private fun trackingLost(): HandPanelGestureState {

@@ -7,18 +7,31 @@ import androidx.annotation.Keep
 import com.fourthward.game.core.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import kotlin.math.exp
 
 /** JNI simulation bridge. Only frame() mutates game/gesture/render state; UI callbacks use InputState. */
 @Keep
-class VrGameBridge(context: Context) {
+class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     private val levels = TutorialLevels.all()
     private val catalog = LevelCatalog(levels)
     private val levelGraph = LevelDependencyGraph(levels)
-    private var mapFirstRow = 0
-    private val mapWindow get() = levelGraph.window(mapFirstRow)
+    private val uiPreferences = context.applicationContext.getSharedPreferences("ui_preferences", Context.MODE_PRIVATE)
+    private var theme = if (uiPreferences.all[DARK_MODE] == true) UiThemeMode.DARK else UiThemeMode.LIGHT
     private val progressStore = LevelProgressStore(context)
-    private val game = FourthwardGame(levels, progressStore.loadLevels(levels), progressStore::save)
+    private val progress = progressStore.loadLevels(levels)
+    private val resume = progressStore.loadResume(levels, progress)
+    private val game = FourthwardGame(levels, progress, progressStore::save).apply {
+        if (resume.index != levelIndex) selectLevel(resume.index)
+    }
+    private enum class MapPage { WELCOME, IN_GAME, HIDDEN }
+    private var mapPage = MapPage.WELCOME
+    private val welcomeVisible get() = mapPage == MapPage.WELCOME
+    private val levelListVisible get() = mapPage != MapPage.HIDDEN
+    private var mapWindow = levelGraph.windowForLevel(resume.index, PalmAction.CONTEXT)
+    private val mapFirstRow get() = mapWindow.firstRow
+    private var welcomeDock: VrHandControls.Panel? = null
+    private var welcomeModel: FloatArray? = null
+    private val welcomeTesseract = WelcomeTesseract()
+    private var exhibitUploaded = false
     private val input = InputState()
     private val focusPolicy = VrFocusPolicy(input)
     private val keyboardMode = AtomicBoolean(false)
@@ -28,39 +41,40 @@ class VrGameBridge(context: Context) {
     private var worldDirty = true
     private var referenceVisible = true
     private var debugVisible = false
-    private var levelListVisible = false
     private var navigationRevision = 0L
     private var feedbackRevision = 0L
     private var effectsSceneRevision = 0L
     private val worldEffects = VrWorldEffects()
-    private var selectedControl = 2
+    private var selectedControl = mapWindow.layout.buttons.indexOfFirst { it.action == PalmAction.CONTEXT }
     private var clickFeedback = 0.0
     private var blockedFeedback = 0.0
+    private var deathFeedback = 0.0
     private var lastHead = VrTrackingMath.Pose(Vec3(0.0, 1.65, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
-    private var receivedFirstHead = false
+    private var gameplaySpace: VrTrackingMath.LevelSpace? = null
     private var diagnosticsElapsed = 0.0
     private var motionSinceLog = false
     private var meshedHeadPosition: Vec3? = null
-    private val palmGesture = HandPanelGesture()
-    private val leftInspector = HandPanelGesture(HandPanelGestureConfig(showSeconds = 0.0, hideSeconds = 0.0))
-    private val swipe = HandSwipeRotation()
-    private val poke = PalmPoke()
-    private enum class HandSide { LEFT, RIGHT }
-    private var selectedHand: HandSide? = null
+    private val handControls = VrHandControls()
     private var rotationActive = false
+    private var pullActive = false
+    private var lastFrameNanos = 0L
     private var panelPose: VrTrackingMath.Pose? = null
     private var debugAnchor: Vec3? = null
     private var pointer: PalmPointerPosition? = null
     private var hoveredAction: PalmAction? = null
+    private var dwellProgress = 0.0
     private var pressedAction: PalmAction? = null
-    private var lesson: LessonPlayer? = LessonPlayer(0)
+    private var lesson: LessonPlayer? = null
     private var lessonAnchor: VrPose? = null
     private var lessonPanelScale = 1.0
+    private var lessonDockDismissed = false
     private var narratedRevision: Pair<Int, Long>? = null
     private var wasLessonAnimating = false
     private var lessonControlFocused = false
     private var lessonFeedbackAction: PalmAction? = null
-    private val narration = LessonNarration(context)
+    private val soundtrack: GameSoundtrack = GameSoundtrack(context, skipStartup) { narration.setAudioAllowed(it) }
+    private val narration: LessonNarration = LessonNarration(context, soundtrack::setSpeaking)
+    val startupPlayed get() = soundtrack.startupPlayed
 
     @Keep
     @Synchronized
@@ -86,6 +100,7 @@ class VrGameBridge(context: Context) {
         if (state.clearTransient) focusReset.set(true)
         if (focused != state.active) Log.i(TAG, "focus resumed=${state.resumed} xr=${state.xrFocused} active=${state.active}")
         focused = state.active
+        soundtrack.setActive(focused)
         narration.setActive(focused && lesson != null && !levelListVisible)
     }
 
@@ -101,6 +116,7 @@ class VrGameBridge(context: Context) {
             KeyEvent.KEYCODE_Q -> InputKey.ROTATE_LEFT
             KeyEvent.KEYCODE_E -> InputKey.ROTATE_RIGHT
             KeyEvent.KEYCODE_M -> InputKey.MENU
+            KeyEvent.KEYCODE_F2 -> InputKey.THEME
             KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_P -> InputKey.RESET
             KeyEvent.KEYCODE_V -> InputKey.REFERENCE
             KeyEvent.KEYCODE_T -> InputKey.RESTART
@@ -135,22 +151,30 @@ class VrGameBridge(context: Context) {
         return true
     }
 
-    /** head=xyz+quaternion xyzw; hands=26*xyz OpenXR joints; null means tracking unavailable. */
+    /** Head XYZ + xyzw. Hands contain 26 joint positions and an optional palm quaternion, or null on tracking loss. */
     @Keep
     @Synchronized
     fun frame(deltaSeconds: Float, head: FloatArray?, leftHand: FloatArray?, rightHand: FloatArray?, controls: FloatArray): VrRenderFrame {
         val dt = deltaSeconds.toDouble().let { if (it.isFinite() && it >= 0.0) it else 0.0 }
         val clockStep = dt.coerceAtMost(0.1)
         val now = System.nanoTime()
+        val elapsedSeconds = if (lastFrameNanos == 0L) 0.0 else (now - lastFrameNanos) / 1e9
+        val handDt = maxOf(dt, elapsedSeconds)
+        lastFrameNanos = now
         if (focusReset.getAndSet(false)) {
-            resetHands()
+            welcomeDock = null
+            welcomeModel = null
+            exhibitUploaded = false
+            resetHandTracking()
             worldDirty = true
         }
         clickFeedback = (clickFeedback - clockStep).coerceAtLeast(0.0)
         blockedFeedback = (blockedFeedback - clockStep).coerceAtLeast(0.0)
+        deathFeedback = (deathFeedback - clockStep).coerceAtLeast(0.0)
         val tracked = VrTrackingMath.head(head)
         val beforeFrame = game.frame
         val beforeCompleted = game.completed
+        val beforeDeaths = game.deathCount
         val beforeMissionRevision = game.missionRevision
         val beforeCheckpoints = game.completedCheckpointIds
         val beforeObservation = game.observationStep
@@ -167,55 +191,66 @@ class VrGameBridge(context: Context) {
                 worldDirty = true
                 Log.i(TAG, "lesson-anchor=$lessonAnchor")
             }
-            if (focused && lesson == null) {
-                val result = game.updateTrackedHead(tracked.position)
-                if (result.blocked) blockedFeedback = 0.8
-                if (!receivedFirstHead) {
-                    receivedFirstHead = true
+            if (focused && lesson == null && !welcomeVisible) {
+                val space = gameplaySpace
+                if (space == null) {
+                    restartGameplay(tracked)
                     logState("initial-rebased-head")
+                } else {
+                    val result = game.updateTrackedHead(space.localPosition(tracked.position))
+                    if (result.blocked) blockedFeedback = 0.8
                 }
                 if ((tracked.position - previousRawHead).lengthSquared() > 1e-8) motionSinceLog = true
                 val meshed = meshedHeadPosition
                 // Reference lines/floor are player-relative even when the affine frame itself
                 // stays unchanged during physical walking. Accumulate movement from last mesh.
-                if (meshed == null || (tracked.position - meshed).lengthSquared() >= 0.002 * 0.002) worldDirty = true
+                if (meshed == null || (game.trackedHead - meshed).lengthSquared() >= 0.002 * 0.002) worldDirty = true
             }
         }
-        input.controller(controllerState(controls), now)
-        val actions = input.frame(dt, now)
+        val actions = if (game.deathCount == beforeDeaths) {
+            input.controller(controllerState(controls), now)
+            input.frame(dt, now)
+        } else InputFrame()
         val commandPage = navigationRevision
         for (command in actions.commands) {
             command(command)
             // Do not apply the old page's remaining queued clicks to its replacement.
-            if (navigationRevision != commandPage) break
+            if (navigationRevision != commandPage || game.deathCount != beforeDeaths) break
         }
-        val handRotation = if (focused) updateHands(dt, tracked,
+        val hand = if (focused && game.deathCount == beforeDeaths) updateHands(handDt, elapsedSeconds, tracked,
             VrTrackingMath.hand(leftHand, true), VrTrackingMath.hand(rightHand, false)) else {
-            resetHands(); HandSwipeRotationState()
+            resetHandTracking()
+            VrHandControls.Frame()
         }
+        fun canSimulate() = focused && tracked != null && navigationRevision == commandPage &&
+            game.deathCount == beforeDeaths && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList
         val theta = if (abs(actions.thetaRadians) > 1e-12) actions.thetaRadians
-            else if (handRotation.active) handRotation.deltaRadians else 0.0
-        if (navigationRevision == commandPage && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList && abs(theta) > 1e-12) {
+            else hand.rotation.deltaRadians
+        if (canSimulate() && abs(theta) > 1e-12) {
             if (game.rotate(theta)) motionSinceLog = true
             if (game.lastMotionBlocked) blockedFeedback = 0.8
         }
-        val movement = tracked?.let { VrTrackingMath.locomotion(it, actions.moveRightMeters,
-            actions.moveForwardMeters, actions.moveUpMeters) } ?: Vec3.ZERO
-        if (focused && navigationRevision == commandPage && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList && movement.lengthSquared() > 1e-16) {
-            val result = game.move(movement)
-            motionSinceLog = motionSinceLog || result.changed
-            if (result.blocked) blockedFeedback = 0.8
+        if (canSimulate()) {
+            val movingWithKeysOrController = actions.moveRightMeters != 0.0 ||
+                actions.moveForwardMeters != 0.0 || actions.moveUpMeters != 0.0
+            val rawMovement = if (movingWithKeysOrController) {
+                VrTrackingMath.locomotion(tracked!!, actions.moveRightMeters, actions.moveForwardMeters, actions.moveUpMeters)
+            } else VrTrackingMath.pullMovement(tracked!!, hand.forwardMeters)
+            if (rawMovement.lengthSquared() > 1e-16) {
+                val result = game.move(checkNotNull(gameplaySpace).localVector(rawMovement))
+                motionSinceLog = motionSinceLog || result.changed
+                if (result.blocked) blockedFeedback = 0.8
+            }
         }
-        if (lesson == null && !startedInLesson && game.tickWorld(clockStep,
-                focused && tracked != null && !levelListVisible && !startedInLevelList)) {
+        if (canSimulate() && game.tickWorld(clockStep)) {
             worldDirty = true
             motionSinceLog = true
         }
-        if (lesson == null && !startedInLesson && game.tickObservation(clockStep,
-                focused && tracked != null && !levelListVisible && !startedInLevelList)) {
+        if (!welcomeVisible && lesson == null && !startedInLesson && game.tickObservation(clockStep, canSimulate())) {
             worldDirty = true
             logState("observation=${game.observationStep}/${game.observationCount}")
         }
+        if (game.deathCount != beforeDeaths) respawn()
         worldDirty = worldDirty || game.frame !== beforeFrame || beforeCompleted != game.completed ||
             beforeMissionRevision != game.missionRevision
         if (beforeCheckpoints != game.completedCheckpointIds) logState("checkpoint")
@@ -244,19 +279,25 @@ class VrGameBridge(context: Context) {
         val selected = layout.buttons[selectedControl.coerceIn(layout.buttons.indices)].action
         val activeLesson = lesson
         val disabled = disabledPanelActions()
+        val keyboardFocus = debugVisible || ((welcomeVisible || activeLesson != null) && (keyboardMode.get() || lessonControlFocused))
         val panel = VrPanelState(referenceVisible,
-            hoveredAction = hoveredAction ?: if (debugVisible || (activeLesson != null && (keyboardMode.get() || lessonControlFocused))) selected else null,
+            theme = theme,
+            hoveredAction = hoveredAction ?: selected.takeIf { pointer == null && keyboardFocus },
             pressedAction = pressedAction ?: if (clickFeedback > 0.0) {
                 if (activeLesson != null) lessonFeedbackAction else if (debugVisible) selected else null
             } else null,
-            pointer = if (debugVisible) null else pointer,
+            pointer = pointer,
+            dwellProgress = dwellProgress,
             contextLabel = contextLabel(),
             referenceLabel = if (game.level.expedition != null) "提示" else "参考平面",
             referenceSelected = game.level.expedition == null && referenceVisible,
-            debugMode = debugVisible,
+            debugMode = debugVisible || (welcomeVisible && keyboardMode.get()),
             labels = if (levelListVisible) null else activeLesson?.let { listOf("上一步", "重播本步", if (it.isAnimating) "演示中" else if (it.isLastStep) "开始探索" else "下一步") },
             disabled = disabled,
-            header = if (levelListVisible) null else activeLesson?.let { "讲解 ${it.stepIndex + 1} / ${it.stepCount} · 左指点击" },
+            header = if (levelListVisible) null else activeLesson?.let {
+                val buttons = if (keyboardMode.get()) "Tab 选择 · Enter 确认" else "捏合、戳按或停留 2 秒"
+                "讲解 ${it.stepIndex + 1} / ${it.stepCount} · $buttons"
+            },
             layout = layout,
             levelItems = if (levelListVisible) mapWindow.nodes.map { node ->
                 val index = node.index
@@ -265,6 +306,7 @@ class VrGameBridge(context: Context) {
                     lockedReason = lockedReason(index))
             } else emptyList(),
             groupTitle = if (levelListVisible) "关卡路线" else null,
+            startLabel = if (!welcomeVisible) null else if (resume.returning) "继续 ${catalog.levelCode(resume.index)}" else "开始游戏",
             completedCount = game.progress.completedCount,
             map = if (levelListVisible) VrLevelMapState(
                 levelGraph.nodes.map { VrMapNode(it.index, it.row, it.column, game.progress.isCompleted(it.index), game.progress.isUnlocked(it.index), it.width) },
@@ -276,25 +318,42 @@ class VrGameBridge(context: Context) {
             LessonNarration.Status.PLAYING -> "语音讲解中"
             LessonNarration.Status.PAUSED -> "语音已暂停"
             LessonNarration.Status.PREPARING -> "准备语音"
-            LessonNarration.Status.UNAVAILABLE -> "字幕讲解 · R 重试语音"
+            LessonNarration.Status.UNAVAILABLE -> if (keyboardMode.get()) "字幕讲解 · R 重试语音" else "字幕讲解 · 可点重播"
             else -> "讲解已结束 · 可继续观察"
         }
         val lessonStatus = activeLesson?.let { VrLessonStatus(it.stepIndex, it.stepCount, it.currentStep.title,
             it.currentStep.narration, it.isAnimating, voiceLabel,
-            geometryTopic = it.definition.geometryTopic, anchorPose = lessonAnchor, motionTopic = it.definition.motionTopic) }
+            geometryTopic = it.definition.geometryTopic, anchorPose = lessonAnchor, motionTopic = it.definition.motionTopic,
+            gesture = it.currentStep.gesture) }
         val uiFrame = ui.render(VrUiState(activeLesson?.let { Math.toDegrees(it.scene.angleRadians) } ?: game.rotationDegrees, tutorialStatus(), panel,
             panelPose = if (focused) panelPose?.renderPose() else null, headPose = lastHead.renderPose(),
             lesson = lessonStatus, panelScale = lessonPanelScale,
             active = focused && tracked != null, pageRevision = navigationRevision,
             feedbackRevision = feedbackRevision), now)
-        val vertices = if (worldDirty && (activeLesson == null || lessonAnchor != null)) (if (activeLesson == null)
-            VrSceneBuilder.build(game, referenceVisible) else LessonSceneBuilder.build(activeLesson.scene, lessonAnchor!!)).also {
+        val vertices = when {
+            !worldDirty -> null
+            welcomeVisible -> if (welcomeModel != null) WelcomeEnvironment.build(theme) else floatArrayOf()
+            activeLesson == null && gameplaySpace != null -> VrSceneBuilder.build(game, referenceVisible, theme)
+            activeLesson != null && lessonAnchor != null -> LessonSceneBuilder.build(activeLesson.scene, lessonAnchor!!)
+            else -> floatArrayOf()
+        }
+        if (vertices != null) {
             worldDirty = false
             meshedHeadPosition = game.trackedHead
-        } else null
-        val effects = worldEffects.frame(game, clockStep, focused && tracked != null,
-            visible = activeLesson == null && !levelListVisible, sceneRevision = effectsSceneRevision)
-        return VrRenderFrame(vertices, uiFrame.uiBitmap, uiFrame.uiQuads, effects)
+        }
+        val exhibitVisible = welcomeVisible && welcomeModel != null
+        val projection = if (exhibitVisible) welcomeTesseract.projection(
+            if (focused && tracked != null) clockStep else 0.0) else null
+        val effects = when {
+            exhibitVisible -> if (exhibitUploaded) null else WelcomeTesseract.vertices
+            welcomeVisible -> floatArrayOf()
+            else -> worldEffects.frame(game, clockStep, focused && tracked != null,
+                visible = activeLesson == null && !levelListVisible, sceneRevision = effectsSceneRevision)
+        }
+        exhibitUploaded = exhibitVisible
+        return VrRenderFrame(vertices, uiFrame.uiBitmap, uiFrame.uiQuads, effects,
+            worldModel = if (welcomeVisible) welcomeModel else if (activeLesson == null) gameplaySpace?.worldModel else null,
+            exhibitProjection = projection, lightEnvironment = theme == UiThemeMode.LIGHT)
     }
 
     private fun controllerState(values: FloatArray): InputControllerState? {
@@ -329,17 +388,16 @@ class VrGameBridge(context: Context) {
         navigationRevision++
         clickFeedback = 0.0
         lessonFeedbackAction = null
-        resetPoke(); resetSwipe(); input.clearForPageChange()
+        resetPanelInput()
+        handControls.resetMotion()
+        input.clearForPageChange()
     }
 
     private fun showLevelList(visible: Boolean, keyboard: Boolean = false) {
-        if (levelListVisible == visible) return
-        levelListVisible = visible
+        if (welcomeVisible || levelListVisible == visible) return
+        mapPage = if (visible) MapPage.IN_GAME else MapPage.HIDDEN
         if (keyboard) debugVisible = true
-        if (visible) {
-            mapFirstRow = (levelGraph.nodes.first { it.index == game.levelIndex }.row - 1)
-                .coerceIn(0, levelGraph.maxFirstRow)
-        }
+        if (visible) mapWindow = levelGraph.windowForLevel(game.levelIndex)
         selectedControl = if (visible) mapWindow.nodes.indexOfFirst { it.index == game.levelIndex }.coerceAtLeast(0)
             else if (lesson != null) 2 else 0
         resetNavigationPage()
@@ -352,14 +410,14 @@ class VrGameBridge(context: Context) {
         showLevelList(false)
     }
 
-    private fun changeGroup(direction: Int) {
+    private fun changeGroup(direction: Int, dragging: Boolean = false) {
         if (!levelListVisible) return
         val next = (mapFirstRow + direction).coerceIn(0, levelGraph.maxFirstRow)
         if (next == mapFirstRow) return
-        mapFirstRow = next
+        mapWindow = levelGraph.window(next, if (welcomeVisible) PalmAction.CONTEXT else PalmAction.BACK)
         val action = if (direction > 0) PalmAction.NEXT_GROUP else PalmAction.PREVIOUS_GROUP
         selectedControl = mapWindow.layout.buttons.indexOfFirst { it.action == action }
-        resetNavigationPage()
+        if (!dragging) resetNavigationPage()
         Log.i(TAG, "map-row=$mapFirstRow slots=${mapWindow.nodes.map { catalog.levelCode(it.index) }}")
     }
 
@@ -380,12 +438,12 @@ class VrGameBridge(context: Context) {
             Log.i(TAG, "level-selection-denied=${index + 1}")
             return
         }
-        beginLesson()
+        enterLevel()
         logState("level-selected")
     }
 
     private fun selectControl(direction: Int) {
-        if (lesson != null) lessonControlFocused = true
+        if (lesson != null || welcomeVisible) lessonControlFocused = true
         else if (!debugVisible) { debugVisible = true; resetHands() }
         val buttons = activePanelLayout().buttons
         val disabled = disabledPanelActions()
@@ -397,6 +455,7 @@ class VrGameBridge(context: Context) {
 
     private fun command(command: InputCommand) {
         when (command) {
+            InputCommand.TOGGLE_THEME -> { execute(PalmAction.TOGGLE_THEME); return }
             InputCommand.TOGGLE_LEVEL_LIST -> { showLevelList(!levelListVisible, keyboard = true); return }
             InputCommand.BACK -> {
                 if (levelListVisible) backFromList()
@@ -422,7 +481,7 @@ class VrGameBridge(context: Context) {
             InputCommand.SELECT_NEXT_CONTROL -> { selectControl(1); return }
             InputCommand.SELECT_PREVIOUS_CONTROL -> { selectControl(-1); return }
             InputCommand.ACTIVATE_CONTROL -> {
-                if (debugVisible || panelPose != null) {
+                if (welcomeVisible || debugVisible || panelPose != null) {
                     lessonControlFocused = true
                     clickFeedback = 0.18
                     execute(activePanelLayout().buttons[selectedControl].action)
@@ -451,16 +510,27 @@ class VrGameBridge(context: Context) {
             InputCommand.TOGGLE_REFERENCE -> execute(PalmAction.TOGGLE_REFERENCE)
             InputCommand.RESTART_LEVEL -> retryLevel()
             InputCommand.NEXT_LEVEL -> advanceAfterCompletion()
-            InputCommand.OPEN_LESSON -> if (game.level.expedition != null) requestHint() else beginLesson()
+            InputCommand.OPEN_LESSON -> if (game.level.expedition != null) requestHint() else enterLevel()
             else -> Unit
         }
     }
 
     private fun execute(action: PalmAction) {
         if (action in disabledPanelActions()) return
+        if (action == PalmAction.TOGGLE_THEME) {
+            theme = theme.toggled()
+            uiPreferences.edit().putBoolean(DARK_MODE, theme == UiThemeMode.DARK).apply()
+            worldDirty = true
+            Log.i(TAG, "theme=$theme")
+            return
+        }
         if (action == PalmAction.LEVEL_LIST) { showLevelList(true); return }
         if (levelListVisible) {
             when (action) {
+                PalmAction.CONTEXT -> if (welcomeVisible) {
+                    enterLevel(showLesson = resume.showLesson)
+                    logState("start-selected")
+                }
                 PalmAction.BACK -> backFromList()
                 PalmAction.PREVIOUS_GROUP -> changeGroup(-1)
                 PalmAction.NEXT_GROUP -> changeGroup(1)
@@ -480,93 +550,119 @@ class VrGameBridge(context: Context) {
         logState("action=$action")
     }
 
-    private fun updateHands(dt: Double, head: VrTrackingMath.Pose?, left: HandLandmarks?, right: HandLandmarks?): HandSwipeRotationState {
-        lessonPanelScale = 1.0
-        if (debugVisible) {
-            resetSwipe(); resetPoke()
-            val view = head ?: lastHead
-            val anchor = debugAnchor ?: (view.position - view.normal * 0.65 - view.up * 0.08).also { debugAnchor = it }
-            panelPose = VrTrackingMath.panelPose(anchor, view)
-            return HandSwipeRotationState()
+    private fun updateHands(
+        dt: Double, elapsedSeconds: Double, head: VrTrackingMath.Pose?, left: HandLandmarks?, right: HandLandmarks?,
+    ): VrHandControls.Frame {
+        if (head == null) {
+            resetHandTracking()
+            return VrHandControls.Frame()
         }
+        val debugDock = if (debugVisible && !welcomeVisible) {
+            val anchor = debugAnchor ?: (head.position - head.normal * .65 - head.up * .08).also { debugAnchor = it }
+            VrTrackingMath.panelPose(anchor, head)?.let { VrHandControls.Panel(it) }
+        } else {
+            debugAnchor = null
+            null
+        }
+        val frame = handControls.update(dt, head, left, right, debugDock ?: activeDock(head), activePanelLayout(), disabledPanelActions(),
+            interactionReady = ui.interactionReady(navigationRevision),
+            allowMotion = lesson == null && !levelListVisible,
+            allowPanelGestures = !welcomeVisible && !debugVisible,
+            allowMapDrag = levelListVisible,
+            panelHoldDeltaSeconds = elapsedSeconds)
+        // A keyboard shortcut may be used while wearing a headset. Switch the hints back
+        // on an intentional hand action so merely tracking a resting hand never steals focus.
+        if (frame.action != null || frame.opened || frame.closed || frame.mapDragRows != 0 ||
+            frame.pulling || frame.rotation.active) {
+            keyboardMode.set(false)
+            lessonControlFocused = false
+        }
+        if (rotationActive != frame.rotation.active) Log.i(TAG, "right-hand-swipe=${frame.rotation.active}")
+        if (pullActive != frame.pulling) Log.i(TAG, "hand-pull=${frame.pulling}")
+        rotationActive = frame.rotation.active
+        pullActive = frame.pulling
+        panelPose = frame.panel?.pose
+        lessonPanelScale = frame.panel?.scale ?: 1.0
+        pointer = frame.pointer
+        dwellProgress = frame.dwellProgress
+        hoveredAction = frame.hovered
+        pressedAction = frame.pressed
+        if (frame.opened) Log.i(TAG, "hand-panel=opened at=${panelPose?.position}")
+        if (frame.closed) {
+            lessonDockDismissed = lesson != null
+            if (levelListVisible) backFromList()
+            Log.i(TAG, "hand-panel=closed")
+        }
+        if (frame.mapDragRows != 0) changeGroup(frame.mapDragRows, dragging = true)
+        frame.action?.let { action ->
+            execute(action)
+            val gesture = when {
+                frame.clickedByDwell -> "hand-dwell"
+                frame.clickedByPinch -> "hand-pinch"
+                else -> "hand-index-poke"
+            }
+            Log.i(TAG, "$gesture=$action")
+        }
+        return frame
+    }
+
+    private fun activeDock(head: VrTrackingMath.Pose): VrHandControls.Panel? {
+        if (!welcomeVisible) return lessonDock()
+        welcomeDock?.let { return it }
+        val pose = VrTrackingMath.startPanelPose(head) ?: return null
+        return VrHandControls.Panel(pose).also {
+            welcomeDock = it
+            welcomeModel = VrTrackingMath.levelSpace(head).worldModel.apply { this[13] = head.position.y.toFloat() }
+            worldDirty = true
+            Log.i(TAG, "start-map anchor=${pose.position} level=${catalog.levelCode(resume.index)} lesson=${resume.showLesson} returning=${resume.returning} firstRow=$mapFirstRow theme=$theme")
+        }
+    }
+
+    private fun lessonDock(): VrHandControls.Panel? {
+        val definition = lesson?.definition ?: return null
+        val anchor = lessonAnchor ?: return null
+        if (lessonDockDismissed) return null
+        val geometryLesson = definition.geometryTopic != null || definition.motionTopic != null
+        val x = if (geometryLesson) 0.0 else .35
+        val y = if (geometryLesson) GeometryLessonLayout.CONTROL_HEIGHT else -.23
+        return VrHandControls.Panel(VrTrackingMath.Pose(anchor.position + anchor.right * x + anchor.normal * .60 +
+            anchor.up * y, anchor.right, anchor.up, anchor.normal), scale = 1.6)
+    }
+
+    private fun clearPanelFeedback() {
+        pointer = null
+        dwellProgress = 0.0
+        hoveredAction = null
+        pressedAction = null
+    }
+
+    private fun resetPanelInput() {
+        handControls.resetPanelInput()
+        clearPanelFeedback()
+    }
+
+    private fun resetHandTracking() {
+        handControls.resetInput()
+        clearPanelFeedback()
+        rotationActive = false
+        pullActive = false
+        panelPose = null
         debugAnchor = null
-        if (head == null) { resetHands(); return HandSwipeRotationState() }
-        val rightPose = palmGesture.update(right, head.position, dt)
-        val controlsMode = rightPose.validTracking && (rightPose.visible || (rightPose.isOpen && rightPose.isFacingHead))
-        val leftPose = leftInspector.update(if (controlsMode) null else left, head.position, dt)
-        fun eligible(pose: HandPanelGestureState, side: HandSide): Boolean {
-            val threshold = if (selectedHand == side && rotationActive) -0.50 else -0.65
-            return pose.validTracking && pose.isOpen && pose.facingDot <= threshold
-        }
-        val cameraRight = VrTrackingMath.horizontalRight(head)
-        val desired = when {
-            lesson != null || levelListVisible || controlsMode || cameraRight == null -> null
-            selectedHand == HandSide.RIGHT && eligible(rightPose, HandSide.RIGHT) -> HandSide.RIGHT
-            selectedHand == HandSide.LEFT && eligible(leftPose, HandSide.LEFT) -> HandSide.LEFT
-            eligible(rightPose, HandSide.RIGHT) -> HandSide.RIGHT
-            eligible(leftPose, HandSide.LEFT) -> HandSide.LEFT
-            else -> null
-        }
-        if (desired != selectedHand) { resetSwipe(); selectedHand = desired }
-        val rotation = if (desired == null || cameraRight == null) {
-            resetSwipe(); HandSwipeRotationState()
-        } else swipe.update(if (desired == HandSide.RIGHT) right else left, head.position, cameraRight, dt)
-        if (rotation.active != rotationActive) Log.i(TAG, "hand-swipe=${rotation.active} hand=$selectedHand")
-        rotationActive = rotation.active
-
-        if (controlsMode && rightPose.visible && right != null && rightPose.palmNormal != null) {
-            val target = right.palm + rightPose.palmNormal * 0.04
-            val previous = panelPose
-            val near = pointer?.let { PalmPanelLayout.inPanel(it.x, it.y) && it.depthMeters in -0.02..0.10 } == true
-            val jump = previous != null && (target - previous.position).length() >= 0.12
-            if (jump) resetPoke()
-            val hold = previous != null && !jump && ((!rightPose.isOpen || !rightPose.isFacingHead) || near)
-            panelPose = if (hold) previous else {
-                val alpha = 1.0 - exp(-dt.coerceIn(0.0, 0.05) / 0.035)
-                val position = if (previous == null || jump) target else previous.position + (target - previous.position) * alpha
-                VrTrackingMath.panelPose(position, head)
-            }
-        } else panelPose = null
-        if (panelPose == null && lesson != null) {
-            lessonAnchor?.let { anchor ->
-                val geometryLesson = lesson?.definition?.let { it.geometryTopic != null || it.motionTopic != null } == true
-                val localX = if (geometryLesson) 0.0 else 0.35
-                val localY = if (geometryLesson) GeometryLessonLayout.CONTROL_HEIGHT else -0.23
-                panelPose = VrTrackingMath.Pose(anchor.position + anchor.right * localX + anchor.normal * 0.60 + anchor.up * localY,
-                    anchor.right, anchor.up, anchor.normal)
-                lessonPanelScale = 1.6
-            }
-        }
-        val panel = panelPose
-        if (panel == null || left == null || !ui.interactionReady(navigationRevision)) resetPoke()
-        else {
-            val layout = activePanelLayout()
-            val hit = VrTrackingMath.pointer(left.index.tip, panel,
-                layout.widthMeters * lessonPanelScale, layout.heightMeters * lessonPanelScale)
-            pointer = hit
-            val result = poke.update(hit.x, hit.y, hit.depthMeters, valid = true, dt = dt,
-                layout = layout, disabled = disabledPanelActions())
-            hoveredAction = result.hoveredAction; pressedAction = result.pressedAction
-            result.action?.let { execute(it); Log.i(TAG, "left-index-poke=$it") }
-        }
-        return rotation
     }
 
-    private fun resetSwipe() {
-        swipe.reset(); selectedHand = null; rotationActive = false
-    }
-    private fun resetPoke() {
-        poke.reset(); pointer = null; hoveredAction = null; pressedAction = null
-    }
     private fun resetHands() {
-        palmGesture.reset(); leftInspector.reset(); resetSwipe(); resetPoke(); panelPose = null; debugAnchor = null
+        handControls.reset()
+        resetHandTracking()
+        lessonDockDismissed = false
     }
 
-    private fun beginLesson() {
+    private fun enterLevel(showLesson: Boolean = true) {
         navigationRevision++
         effectsSceneRevision++
-        levelListVisible = false
-        lesson = if (LessonTutorials.hasLesson(game.levelIndex)) LessonPlayer(game.levelIndex) else null
+        mapPage = MapPage.HIDDEN
+        welcomeDock = null
+        welcomeModel = null
+        lesson = if (showLesson && LessonTutorials.hasLesson(game.levelIndex)) LessonPlayer(game.levelIndex) else null
         lessonAnchor = null
         narratedRevision = null
         wasLessonAnimating = false
@@ -575,16 +671,37 @@ class VrGameBridge(context: Context) {
         selectedControl = if (lesson != null) 2 else 0
         debugVisible = false
         blockedFeedback = 0.0
+        deathFeedback = 0.0
+        gameplaySpace = null
         resetHands()
         worldDirty = true
         input.clearForPageChange()
         narration.stop()
         narration.setActive(focused && lesson != null)
-        if (lesson == null) {
-            // The next chapter starts in its world, with the current tracking origin rebased.
-            game.restartLevel(lastHead.position)
-            receivedFirstHead = true
-        }
+        progressStore.saveResume(game.level.id, showLesson = lesson != null)
+        // Exploration is rebased on the next valid tracked pose, including after startup tracking loss.
+    }
+
+    private fun restartGameplay(head: VrTrackingMath.Pose) {
+        val space = VrTrackingMath.levelSpace(head)
+        gameplaySpace = space
+        worldDirty = true
+        game.restartLevel(space.localPosition(head.position))
+    }
+
+    private fun respawn() {
+        // The collision already restored the level. Align it in front of the user's live pose.
+        gameplaySpace = VrTrackingMath.levelSpace(lastHead, game.trackedHead)
+        effectsSceneRevision++
+        debugVisible = false
+        mapPage = MapPage.HIDDEN
+        selectedControl = 0
+        resetNavigationPage()
+        resetHands()
+        blockedFeedback = 0.0
+        deathFeedback = 2.0
+        worldDirty = true
+        logState("respawn")
     }
 
     private fun contextLabel(): String = when {
@@ -596,18 +713,20 @@ class VrGameBridge(context: Context) {
 
     private fun advanceAfterCompletion() {
         if (!game.completed) return
-        if (game.nextLevel()) { beginLesson(); logState("next") }
+        if (game.nextLevel()) { enterLevel(); logState("next") }
         else showLevelList(true, keyboard = keyboardMode.get())
     }
 
     private fun retryLevel() {
-        val restored = game.retryAtCheckpoint(lastHead.position)
+        val restored = game.retryAtCheckpoint(gameplaySpace?.localPosition(lastHead.position))
+        if (!restored) gameplaySpace = VrTrackingMath.levelSpace(lastHead, game.trackedHead)
         navigationRevision++
         effectsSceneRevision++
         input.clearForPageChange()
         resetHands()
         worldDirty = true
         blockedFeedback = 0.0
+        deathFeedback = 0.0
         logState(if (restored) "checkpoint-retry" else "restart")
     }
 
@@ -633,8 +752,8 @@ class VrGameBridge(context: Context) {
                     narration.setActive(false)
                     // Observation can involve unrestricted room-scale walking. Start the actual
                     // level under the current head, never credit tutorial walking as game progress.
-                    game.restartLevel(lastHead.position)
-                    receivedFirstHead = true
+                    progressStore.saveResume(game.level.id, showLesson = false)
+                    restartGameplay(lastHead)
                     input.clearForPageChange()
                     debugVisible = false
                     resetHands()
@@ -651,13 +770,13 @@ class VrGameBridge(context: Context) {
         navigationRevision++
         lessonFeedbackAction = action
         clickFeedback = 0.18
-        resetPoke()
+        resetPanelInput()
         worldDirty = true
     }
 
     @Keep
     @Synchronized
-    fun close() { narration.close(); ui.close(); worldEffects.reset(); resetHands(); input.setEnabled(false) }
+    fun close() { narration.close(); soundtrack.close(); ui.close(); worldEffects.reset(); resetHands(); input.setEnabled(false) }
 
     private fun tutorialStatus(): VrTutorialStatus {
         val geometryLesson = game.level.geometryTopic != null
@@ -666,6 +785,8 @@ class VrGameBridge(context: Context) {
         val expedition = game.level.expedition
         val hasNext = game.nextLevelUnlocked
         val instruction = when {
+            deathFeedback > 0.0 -> if (game.level.motionPuzzle == MotionPuzzle.DRIFTING_PASSAGE)
+                "被漂游体撞到，已回到起点。" else "被移动墙撞到，已回到起点。"
             game.completed -> when {
                 hasNext -> "本课完成。按 N 或在掌心选择「下一课」。"
                 catalog.isTutorial(game.levelIndex) && game.tutorialRouteComplete -> "教程主线完成。按 N 查看游玩支线。"
@@ -677,13 +798,14 @@ class VrGameBridge(context: Context) {
             else -> game.level.instruction
         }
         val p = game.playerFootWorld()
+        val goalHidden = game.levelIndex == 1 && game.visibleSpheres().none { it.source.id == "goal" }
         val hint = if (game.completed) "T 可重玩本关 · L 选择关卡"
             else if (expedition != null) game.missionHint?.let { "提示 ${game.hintTier} / 3 · $it" }
                 ?: "需要线索时，按 H 或在掌心选择「提示」。"
             else if (geometryLesson || motionStudy) game.observationHint ?: "保持当前截面，完成提示中的观察。"
             else when (game.levelIndex) {
             0 -> "沿当前平面向前约 2.4 米，走到青色旗帜。"
-            1 -> if (game.visibleSpheres().none { it.source.id == "goal" }) "转到约 90°，金色出口会进入当前切片。"
+            1 -> if (goalHidden) "转到约 90°，金色出口会进入当前切片。"
                 else "保持角度，向右靠近旗帜，再向前走；只旋转不会移动你。"
             2 -> when {
                 abs(p.x) >= 3.0 || p.w <= -6.0 -> "你仍在封闭空间外；可重试，先转到 90° 再向右移动。"
@@ -694,20 +816,33 @@ class VrGameBridge(context: Context) {
             }
             else -> game.level.hint
         }
+        val gesture = when {
+            game.completed -> LessonGesture.PANEL
+            goalHidden -> LessonGesture.ROTATE
+            game.levelIndex == 1 -> LessonGesture.WALK
+            else -> LessonTutorials.all().firstOrNull { it.levelIndex == game.levelIndex }?.steps?.last()?.gesture
+        }
         return VrTutorialStatus(catalog.localNumber(game.levelIndex) - 1, chapter.levelIndices.size, game.level.title, instruction, hint,
             game.completed, if (geometryLesson || motionStudy || expedition != null) null else (p - game.level.goal.center).length(), blockedFeedback > 0.0 || game.physicalContact, keyboardMode.get(),
             locomotionLocked = game.locomotionLocked, expedition = expedition != null,
             checkpointAvailable = game.hasCheckpoint,
-            progressLabel = expedition?.let { "路标 ${game.completedCheckpointIds.size} / ${it.checkpoints.size}" },
-            levelCode = catalog.levelCode(game.levelIndex), chapterTitle = chapter.title)
+            progressLabel = expedition?.checkpoints?.takeIf { it.isNotEmpty() }
+                ?.let { "路标 ${game.completedCheckpointIds.size} / ${it.size}" },
+            levelCode = catalog.levelCode(game.levelIndex), chapterTitle = chapter.title, gesture = gesture)
     }
 
     private fun VrTrackingMath.Pose.renderPose() = VrPose(position, right, up, normal)
     private fun logState(reason: String) {
-        Log.i(TAG, "$reason rawHead=${lastHead.position} viewForward=${lastHead.normal * -1.0} playerHead4=${game.playerWorld()} playerFeet4=${game.playerFootWorld()} theta=${game.rotationDegrees} level=${game.levelIndex + 1} completed=${game.completed} origin=${game.frame.origin} checkpoints=${game.completedCheckpointIds} hint=${game.hintTier} chapter=${catalog.levelCode(game.levelIndex)} motionTime=${game.motionTimeSeconds} observation=${game.observationStep}/${game.observationCount} movingContact=${game.motionBlocked}")
+        val forward = lastHead.normal * -1.0
+        Log.i(TAG, "$reason rawHead=${lastHead.position} viewForward=$forward levelForward=${gameplaySpace?.localVector(forward)} " +
+            "playerHead4=${game.playerWorld()} playerFeet4=${game.playerFootWorld()} theta=${game.rotationDegrees} " +
+            "level=${game.levelIndex + 1} completed=${game.completed} origin=${game.frame.origin} " +
+            "checkpoints=${game.completedCheckpointIds} hint=${game.hintTier} chapter=${catalog.levelCode(game.levelIndex)} " +
+            "motionTime=${game.motionTimeSeconds} observation=${game.observationStep}/${game.observationCount} deaths=${game.deathCount}")
     }
     private companion object {
         const val TAG = "FourthwardXR/Game"
+        const val DARK_MODE = "dark_mode"
         val levelActions = PalmPanelLayout.levelActions
     }
 }

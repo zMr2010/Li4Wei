@@ -99,9 +99,10 @@ class LevelDependencyGraph(
     /** Full gates, not the reduced set of visible lines. */
     fun prerequisiteIndices(index: Int): Set<Int> = requirements.getValue(index).toSet()
 
-    fun windowForLevel(index: Int): LevelMapWindow = window(nodes.first { it.index == index }.row - 1)
+    fun windowForLevel(index: Int, primaryAction: PalmAction = PalmAction.BACK): LevelMapWindow =
+        window(nodes.first { it.index == index }.row - 1, primaryAction)
 
-    fun window(firstRow: Int): LevelMapWindow {
+    fun window(firstRow: Int, primaryAction: PalmAction = PalmAction.BACK): LevelMapWindow {
         val start = firstRow.coerceIn(0, maxFirstRow)
         // Never split a parallel row or silently drop its sibling when the input slots fill up.
         val rows = (start until minOf(totalRows, start + LevelMapWindow.VISIBLE_ROWS))
@@ -119,10 +120,12 @@ class LevelDependencyGraph(
                 node.column + node.width / 2, y + LevelMapWindow.NODE_HEIGHT / 2)
         } + listOf(
             NormalizedButtonRect(PalmAction.PREVIOUS_GROUP, .08, LevelMapWindow.CONTROLS_TOP, .33, LevelMapWindow.CONTROLS_BOTTOM),
-            NormalizedButtonRect(PalmAction.BACK, .375, LevelMapWindow.CONTROLS_TOP, .625, LevelMapWindow.CONTROLS_BOTTOM),
+            NormalizedButtonRect(primaryAction, .375, LevelMapWindow.CONTROLS_TOP, .625, LevelMapWindow.CONTROLS_BOTTOM),
             NormalizedButtonRect(PalmAction.NEXT_GROUP, .67, LevelMapWindow.CONTROLS_TOP, .92, LevelMapWindow.CONTROLS_BOTTOM),
+            NormalizedButtonRect(PalmAction.TOGGLE_THEME, .48, .010, .72, .074),
         )
+        val widthMeters = if (primaryAction == PalmAction.CONTEXT) .44 else LevelMapWindow.WIDTH_METERS
         return LevelMapWindow(start, visible, crossingEdges,
-            PalmPanelSpec(LevelMapWindow.WIDTH_DP, LevelMapWindow.HEIGHT_DP, LevelMapWindow.WIDTH_METERS, buttons), rows.size)
+            PalmPanelSpec(LevelMapWindow.WIDTH_DP, LevelMapWindow.HEIGHT_DP, widthMeters, buttons), rows.size)
     }
 }

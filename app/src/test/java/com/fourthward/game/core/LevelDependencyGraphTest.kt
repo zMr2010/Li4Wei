@@ -112,6 +112,23 @@ class LevelDependencyGraphTest {
         assertEquals(PalmAction.NEXT_GROUP, window.layout.hitTest(.795, controlsY))
     }
 
+    @Test fun welcomeRouteOpensAtTheSavedLevelAndOffersStartAtTheUsualReturnPosition() {
+        for (index in levels.indices) {
+            val welcome = graph.windowForLevel(index, PalmAction.CONTEXT)
+            val route = graph.windowForLevel(index)
+            assertEquals(route.nodes, welcome.nodes)
+            assertTrue(welcome.nodes.any { it.index == index })
+            assertEquals(route.edges, welcome.edges)
+            val y = (LevelMapWindow.CONTROLS_TOP + LevelMapWindow.CONTROLS_BOTTOM) / 2
+            assertEquals(PalmAction.CONTEXT, welcome.layout.hitTest(.50, y))
+            assertEquals(PalmAction.BACK, route.layout.hitTest(.50, y))
+            for (map in listOf(welcome, route)) {
+                assertEquals(PalmAction.TOGGLE_THEME, map.layout.hitTest(.60, .04))
+                assertNull(map.levelForAction(PalmAction.TOGGLE_THEME))
+            }
+        }
+    }
+
     @Test fun denserOptionalRowsRemainWholeAndWithinInputCapacity() {
         val requirements = LevelProgress.requirementsForLevels(levels).toMutableMap()
         // Two adjacent four-node rows exceed nine slots across six layers.

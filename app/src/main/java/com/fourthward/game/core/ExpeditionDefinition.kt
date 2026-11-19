@@ -22,7 +22,6 @@ data class ExpeditionDefinition(
     val stages: List<MissionStage>,
 ) {
     init {
-        require(checkpoints.isNotEmpty())
         require(checkpoints.map { it.id }.distinct().size == checkpoints.size)
         require(checkpoints.all { it.id.isNotBlank() && it.title.isNotBlank() })
         require(stages.size == checkpoints.size + 1)

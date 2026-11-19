@@ -29,4 +29,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Fourthward"
 
-include(":app")
+include(":app", ":quest")

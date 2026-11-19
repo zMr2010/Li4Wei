@@ -4,10 +4,10 @@ enum class PalmAction {
     RESET_ANGLE, TOGGLE_REFERENCE, CONTEXT, LEVEL_LIST, BACK,
     /** Visible map slots; the viewport maps them to stable absolute level indices. */
     LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4, LEVEL_5, LEVEL_6, LEVEL_7, LEVEL_8, LEVEL_9,
-    PREVIOUS_GROUP, NEXT_GROUP,
+    PREVIOUS_GROUP, NEXT_GROUP, TOGGLE_THEME,
 }
 
-/** Actual left index tip: normalized panel coordinates, positive depth in front. */
+/** Normalized panel coordinates with positive depth in front of the panel. */
 data class PalmPointerPosition(val x: Double, val y: Double, val depthMeters: Double)
 
 /** The UI and physical contact detector consume these same panel-local rectangles. */
@@ -62,13 +62,15 @@ object PalmPanelLayout {
         NormalizedButtonRect(PalmAction.RESET_ANGLE, .04, .18, .32, .70),
         NormalizedButtonRect(PalmAction.TOGGLE_REFERENCE, .36, .18, .64, .70),
         NormalizedButtonRect(PalmAction.CONTEXT, .68, .18, .96, .70),
-        NormalizedButtonRect(PalmAction.LEVEL_LIST, .04, .76, .96, .94),
+        NormalizedButtonRect(PalmAction.LEVEL_LIST, .04, .73, .48, .95),
+        NormalizedButtonRect(PalmAction.TOGGLE_THEME, .52, .73, .96, .95),
     ))
     val game = PalmPanelSpec(400, 300, 0.18, listOf(
-        NormalizedButtonRect(PalmAction.RESET_ANGLE, .04, .20, .48, .53),
-        NormalizedButtonRect(PalmAction.TOGGLE_REFERENCE, .52, .20, .96, .53),
-        NormalizedButtonRect(PalmAction.CONTEXT, .04, .57, .48, .90),
-        NormalizedButtonRect(PalmAction.LEVEL_LIST, .52, .57, .96, .90),
+        NormalizedButtonRect(PalmAction.RESET_ANGLE, .04, .20, .48, .46),
+        NormalizedButtonRect(PalmAction.TOGGLE_REFERENCE, .52, .20, .96, .46),
+        NormalizedButtonRect(PalmAction.CONTEXT, .04, .51, .48, .76),
+        NormalizedButtonRect(PalmAction.LEVEL_LIST, .52, .51, .96, .76),
+        NormalizedButtonRect(PalmAction.TOGGLE_THEME, .28, .80, .72, .975),
     ))
     val levelActions = listOf(PalmAction.LEVEL_1, PalmAction.LEVEL_2, PalmAction.LEVEL_3,
         PalmAction.LEVEL_4, PalmAction.LEVEL_5, PalmAction.LEVEL_6,
@@ -104,7 +106,7 @@ data class PalmPokeResult(
 )
 
 /**
- * Consumes actual LEFT index-tip samples in the panel's coordinate system.
+ * Consumes actual index-tip samples from one hand in the panel's coordinate system.
  * Positive depth is in front of the panel. Proximity/hover alone never fires.
  * A fresh sample above 3 cm arms a contact at <=8 mm, no deeper than 2 cm behind.
  * Contact anywhere (including the gap) latches until withdrawal; off-panel,

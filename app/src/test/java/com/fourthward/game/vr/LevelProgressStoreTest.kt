@@ -68,15 +68,65 @@ class LevelProgressStoreTest {
         assertFalse(loaded.isUnlocked(11))
     }
 
+    @Test fun lastEnteredLevelAndLessonPhaseAreCommittedAndSurviveRecreatingTheStore() {
+        val memory = MemoryPreferences()
+        val levels = TutorialLevels.all()
+        val store = LevelProgressStore(memory.preferences)
+        val cleared = setOf("walk", "turn", "around", "hypersphere", "tesseract", "ambiguity")
+        store.save(LevelProgress.forLevels(levels, cleared))
+        store.saveResume("motion-normal", showLesson = true)
+        val reopened = LevelProgressStore(memory.preferences)
+        val progress = reopened.loadLevels(levels)
+        val index = levels.indexOfFirst { it.id == "motion-normal" }
+        assertEquals(LevelProgressStore.ResumeLevel(index, true), reopened.loadResume(levels, progress))
+        store.saveResume("motion-normal", showLesson = false)
+        assertEquals(LevelProgressStore.ResumeLevel(index, false), reopened.loadResume(levels, progress))
+        assertEquals(cleared, reopened.loadLevels(levels).completedIds)
+        assertEquals(3, memory.commits)
+    }
+
+    @Test fun firstLaunchShowsStartAndEnteringTheFirstLevelCreatesAContinueTargetBeforeAnyClear() {
+        val memory = MemoryPreferences()
+        val levels = TutorialLevels.all()
+        val store = LevelProgressStore(memory.preferences)
+        val progress = store.loadLevels(levels)
+        val fresh = store.loadResume(levels, progress)
+        assertEquals(LevelProgressStore.ResumeLevel(0, showLesson = true, returning = false), fresh)
+        assertEquals(0, memory.commits)
+
+        store.saveResume(levels.first().id, showLesson = false)
+        assertEquals(LevelProgressStore.ResumeLevel(0, showLesson = false, returning = true),
+            LevelProgressStore(memory.preferences).loadResume(levels, progress))
+        assertEquals(1, memory.commits)
+    }
+
+    @Test fun aLegacyOrInvalidResumeFallsBackToTheFirstIncompleteTutorial() {
+        val memory = MemoryPreferences()
+        val levels = TutorialLevels.all()
+        val store = LevelProgressStore(memory.preferences)
+        store.save(LevelProgress.forLevels(levels, setOf("walk", "turn", "around")))
+        val progress = store.loadLevels(levels)
+        val fallback = LevelProgressStore.ResumeLevel(levels.indexOfFirst { it.id == "hypersphere" })
+        assertEquals(fallback, store.loadResume(levels, progress))
+        store.saveResume("motion-gates", showLesson = false)
+        assertEquals(fallback, store.loadResume(levels, progress))
+        store.saveResume("removed", showLesson = false)
+        assertEquals(fallback, store.loadResume(levels, progress))
+    }
+
     /** Interface-only fake: these JVM tests do not need an Android runtime or Mockito. */
     private class MemoryPreferences {
         val values = mutableMapOf<String, Any?>()
+        var commits = 0
+            private set
         val preferences = Proxy.newProxyInstance(
             SharedPreferences::class.java.classLoader, arrayOf(SharedPreferences::class.java),
         ) { _, method, args ->
             when (method.name) {
                 "getInt" -> values[args!![0] as String]?.let { it as Int } ?: args[1]
                 "getStringSet" -> values[args!![0] as String]?.let { it as Set<*> } ?: args[1]
+                "getString" -> values[args!![0] as String]?.let { it as String } ?: args[1]
+                "getBoolean" -> values[args!![0] as String]?.let { it as Boolean } ?: args[1]
                 "edit" -> editor()
                 else -> error("Unexpected preference call: ${method.name}")
             }
@@ -88,8 +138,15 @@ class LevelProgressStoreTest {
                 SharedPreferences.Editor::class.java.classLoader, arrayOf(SharedPreferences.Editor::class.java),
             ) { proxy, method, args ->
                 when (method.name) {
-                    "putInt", "putStringSet" -> { pending[args!![0] as String] = args[1]; proxy }
-                    "apply" -> { values.putAll(pending); null }
+                    "putInt", "putStringSet", "putString", "putBoolean" -> {
+                        pending[args!![0] as String] = args[1]
+                        proxy
+                    }
+                    "commit" -> {
+                        values.putAll(pending)
+                        commits++
+                        true
+                    }
                     else -> error("Unexpected editor call: ${method.name}")
                 }
             } as SharedPreferences.Editor

@@ -77,8 +77,10 @@ class VrLevelMapStateTest {
             assertTrue(map.segments().all { it.y1 >= it.y2 })
         }
     }
-    @Test fun atlasHoldsNineNodesThreeControlsAndEveryExistingOverlayWithoutOverlap() {
-        assertEquals(12, VrUiAtlas.buttons.size)
+    @Test fun atlasHoldsTheLargestMapAndEveryOverlayWithoutOverlap() {
+        val graph = LevelDependencyGraph(TutorialLevels.all())
+        val maxButtons = (0..graph.maxFirstRow).maxOf { graph.window(it).layout.buttons.size }
+        assertEquals(maxButtons, VrUiAtlas.buttons.size)
         VrUiAtlas.all.forEach { region ->
             assertTrue(region.x >= 0 && region.y >= 0)
             assertTrue(region.x + region.width <= 2048 && region.y + region.height <= 1024)

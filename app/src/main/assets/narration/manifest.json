@@ -10,27 +10,27 @@
   "clips": [
     {
       "id": "l1_plane",
-      "textSha256": "3966d22b4b18e8fe0e29e495fb471ad37e34e504d912e10a5ce308044f289779",
-      "audioSha256": "796098a389917e48bc434e5cad002f0c65b76c4e72dbda05b4b8980893ba205e",
-      "requestSha256": "e5c3bfc2ba95e26b0fa8864bff61f80f81d5cbc3130818924d93d4b08118bcf8",
-      "durationSeconds": 9.473741,
-      "bytes": 153800
+      "textSha256": "2d7fac5ac01e0cd12e9b7caf2f9335e9b532257ecc0d9a1079c2e73bb8686f66",
+      "audioSha256": "b25366f74405e92f2b594ce8b54ef9028cb4b37351ab5544cd4e82c1c3bd6b3e",
+      "requestSha256": "1110df753bcebb8b31f665ffde55a2e806c9b09a1fd7226d168b45311d1e8315",
+      "durationSeconds": 16.625488,
+      "bytes": 268364
     },
     {
       "id": "l1_walk",
-      "textSha256": "365da7322b9007b6ab9ea9423d45fc0fb5736fb718dc0541c08d1796db0802eb",
-      "audioSha256": "6cd03bedc6f3203e8a6df5a85e9c37eedd4d6fd9aef091447a41ffdc1f58848f",
-      "requestSha256": "06e516c6b460ed657e3fb148615646ebeb898101415dec2e5bebc429e37f3f09",
-      "durationSeconds": 9.102222,
-      "bytes": 147373
+      "textSha256": "a6bfe53d5ae3c112e588b704d9727ba3eed9c65ce1930c93620dcb361493c3eb",
+      "audioSha256": "6f56855d960b37983a44f417594266ae6f5ab76bd7e8896bace3ac85434ec240",
+      "requestSha256": "0bc64330f424831d58037604f4860ad5334e303bf3c7dc678d0897789d1c5814",
+      "durationSeconds": 15.51093,
+      "bytes": 250173
     },
     {
       "id": "l1_ready",
-      "textSha256": "de1cb1060f49c48e05c1923956d571e541653ccce220ac6d84ad227551be92e7",
-      "audioSha256": "f5cd02ea6df3730b81d94164e7ad9b68951c3630636fc54dfa7628c23d81a973",
-      "requestSha256": "289d15ee8b1656f7ac3fce74679068827677791a00b2772ae1b6f4be3c6b908b",
-      "durationSeconds": 10.21678,
-      "bytes": 162468
+      "textSha256": "1c1b847feadc87b76459900130cd51221d40050e727ccc88d6ddb55b0818b591",
+      "audioSha256": "ca84adfa18369692517f8655376530467b24c0bca1a5a02bd8d5b8749eb071e4",
+      "requestSha256": "3f930df8d2efbff9f5dbd9772bde0062983efa01dfd23e23fb3fca16eda82024",
+      "durationSeconds": 13.374694,
+      "bytes": 218733
     },
     {
       "id": "l2_hidden",
@@ -42,11 +42,11 @@
     },
     {
       "id": "l2_rotate",
-      "textSha256": "bbd1b74b78c2f0be760c75d3b319e921a8bb0bc88799b0e0f8b945d929476834",
-      "audioSha256": "a741f037b94dc134900551c0db2efd680b38bf12cfb543b09faaeb26cf3d5e42",
-      "requestSha256": "aba262fad9a50b883668f2fb251bb725841fc08e954f8d6baf070e66c3c76112",
-      "durationSeconds": 10.07746,
-      "bytes": 161382
+      "textSha256": "43898c8957f400d363781b93f5ebf054f1773196b43a5119957f91a1c26d32ec",
+      "audioSha256": "bb2e29426ba2e0a7bbb2778bba75f202f5f5c142feb21ce9c5f4129e1906010c",
+      "requestSha256": "d465485915a16ddd74eee8e96b1b6e6a3b400c81dd26e670e4d45c98817ddf62",
+      "durationSeconds": 18.158005,
+      "bytes": 294829
     },
     {
       "id": "l2_walk",

@@ -121,6 +121,7 @@ fun FourthwardPanel(state: PanelState, onAction: (PalmAction) -> Unit) {
                         PalmAction.LEVEL_9 -> "第九关"
                         PalmAction.PREVIOUS_GROUP -> "上一组"
                         PalmAction.NEXT_GROUP -> "下一组"
+                        PalmAction.TOGGLE_THEME -> "切换外观"
                     },
                     color = if (pressed) PalmStyle.Ink else PalmStyle.Ivory,
                     fontSize = 22.sp,

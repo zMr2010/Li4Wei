@@ -4,6 +4,7 @@ import com.fourthward.game.core.BoxSection
 import com.fourthward.game.core.FourthwardGame
 import com.fourthward.game.core.SliceFrame
 import com.fourthward.game.core.SphereSection
+import com.fourthward.game.core.UiThemeMode
 import com.fourthward.game.core.Vec3
 import kotlin.math.PI
 import kotlin.math.abs
@@ -16,7 +17,7 @@ import kotlin.math.sin
 
 /** CPU-only exact section authoring. Native consumes opaque sRGB xyzrgba triangle vertices. */
 object VrSceneBuilder {
-    fun build(game: FourthwardGame, showReference: Boolean): FloatArray {
+    fun build(game: FourthwardGame, showReference: Boolean, theme: UiThemeMode = UiThemeMode.LIGHT): FloatArray {
         val sections = game.sections()
         val spheres = game.visibleSpheres()
         val frame = game.frame
@@ -32,7 +33,7 @@ object VrSceneBuilder {
                 game.level.expedition?.ordered != true || checkpoint.id == firstPending,
             )
         }
-        val meshes = worldScene(sections, spheres, showReference, frame, head, color, completed, markers, game.goalReady)
+        val meshes = worldScene(sections, spheres, showReference, frame, head, color, completed, markers, game.goalReady, theme)
         val output = FloatArray(meshes.sumOf { it.second.indices.size } * 7)
         var cursor = 0
         fun srgb(linear: Float): Float {
@@ -71,8 +72,10 @@ private val GRAPHITE = Tint(0.025187f, 0.031896f, 0.033105f) // sRGB #2C3233
 private val METAL = Tint(0.194618f, 0.223228f, 0.215861f) // sRGB #7A8280
 private val INK = Tint(0.006995f, 0.009134f, 0.010330f) // sRGB #14181A
 private val RULE = Tint(0.152926f, 0.177888f, 0.174647f) // sRGB #6D7574
-private val GRID = Tint(0.038204f, 0.043735f, 0.043735f) // sRGB #373B3B
-private val FLOOR = Tint(0.008568f, 0.010330f, 0.010330f) // sRGB #171A1A
+private val LIGHT_FLOOR = argbTint(0x9da49d)
+private val LIGHT_GRID = argbTint(0x606b65)
+private val DARK_FLOOR = argbTint(0x202624)
+private val DARK_GRID = argbTint(0x47534d)
 
 private fun argbTint(argb: Long): Tint {
     fun channel(shift: Int): Float {
@@ -205,6 +208,7 @@ private fun worldScene(
     completed: Boolean,
     markers: Map<String, BeaconStyle>,
     goalReady: Boolean,
+    theme: UiThemeMode,
 ): List<Pair<String, PaintedMesh>> {
     val solids = PaintedMesh()
     val edges = PaintedMesh()
@@ -215,7 +219,7 @@ private fun worldScene(
     val goalTint = argbTint(goalColorArgb).dimmed(if (goalReady) 1f else .22f)
 
     // An explicitly observer-owned ground reference, not another projected 4D object.
-    addGroundReference(floorReference, frame, trackedHead)
+    addGroundReference(floorReference, frame, trackedHead, theme)
     sections.forEach { section ->
         val cool = section.source.id in setOf("tesseract-secondary", "study-long")
         val customTint = section.source.colorArgb?.let { argbTint(it.toLong()) }
@@ -394,15 +398,16 @@ private fun addBeaconAnnotation(mesh: PaintedMesh, section: SphereSection, floor
 }
 
 /** World Z=0 floor; metre phase shifts with in-plane translation so locomotion is visible. */
-private fun addGroundReference(mesh: PaintedMesh, frame: SliceFrame, head: Vec3) {
+private fun addGroundReference(mesh: PaintedMesh, frame: SliceFrame, head: Vec3, theme: UiThemeMode) {
     val extent = 12.0
     val floorY = -frame.origin.z
     val left = head.x - extent; val right = head.x + extent
     val back = head.z - extent; val front = head.z + extent
+    val grid = if (theme == UiThemeMode.LIGHT) LIGHT_GRID else DARK_GRID
     mesh.face(
         listOf(Vec3(left, floorY - .012, back), Vec3(left, floorY - .012, front),
             Vec3(right, floorY - .012, front), Vec3(right, floorY - .012, back)),
-        Vec3(0.0, 1.0, 0.0), FLOOR,
+        Vec3(0.0, 1.0, 0.0), if (theme == UiThemeMode.LIGHT) LIGHT_FLOOR else DARK_FLOOR,
     )
     val originS = frame.origin.dot(frame.right)
     val originW = frame.origin.w
@@ -411,8 +416,8 @@ private fun addGroundReference(mesh: PaintedMesh, frame: SliceFrame, head: Vec3)
     for (step in -11..11) {
         val x = metreS + step - originS
         val z = metreW + step - originW
-        mesh.line(Vec3(x, floorY - .005, back), Vec3(x, floorY - .005, front), .0025, GRID)
-        mesh.line(Vec3(left, floorY - .005, z), Vec3(right, floorY - .005, z), .0025, GRID)
+        mesh.line(Vec3(x, floorY - .005, back), Vec3(x, floorY - .005, front), .0035, grid)
+        mesh.line(Vec3(left, floorY - .005, z), Vec3(right, floorY - .005, z), .0035, grid)
     }
 }
 

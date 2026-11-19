@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.fourthward.game"
     compileSdk = 35
-    ndkVersion = "28.2.13676358"
+    ndkVersion = libs.versions.androidNdk.get()
 
     defaultConfig {
         applicationId = "com.fourthward.game"
@@ -46,13 +46,13 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = libs.versions.cmake.get()
         }
     }
 }
 
 dependencies {
-    implementation("org.khronos.openxr:openxr_loader_for_android:1.1.65")
+    implementation(libs.openxr.loader)
     implementation(libs.androidx.core.ktx)
     implementation(platform(libs.spatial.bom))
     implementation(libs.spatial.core)

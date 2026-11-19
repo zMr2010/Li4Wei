@@ -8,6 +8,16 @@ import kotlin.math.sin
 import kotlin.math.PI
 
 class LessonTutorialTest {
+    @Test fun gestureCuesFollowTheDemonstratedAction() {
+        val steps = LessonTutorials.all().flatMap { it.steps }.associateBy { it.id }
+        assertEquals(LessonGesture.PANEL, steps.getValue("l1_plane").gesture)
+        assertEquals(LessonGesture.WALK, steps.getValue("l1_walk").gesture)
+        assertEquals(LessonGesture.ROTATE_RIGHT, steps.getValue("l2_rotate").gesture)
+        assertEquals(LessonGesture.ROTATE_LEFT, steps.getValue("l3_rotate_parallel").gesture)
+        assertNull(steps.getValue("l10_motion_enter").gesture)
+        assertTrue(LessonTutorials.all().all { it.steps.last().gesture != null })
+    }
+
     @Test fun everyLevelHasDistinctNamedNarratedStepsAndAnExplicitReadyStep() {
         val lessons = LessonTutorials.all()
         assertEquals(TutorialLevels.all().count { it.expedition == null }, lessons.size)

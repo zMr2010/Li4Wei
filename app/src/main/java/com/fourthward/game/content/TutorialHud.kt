@@ -72,7 +72,7 @@ class TutorialHud {
             HudInk.lines(canvas, visible.instruction, 18f, 53f, 604, HudInk.paint(23f), 2)
             HudInk.text(canvas, visible.hint, 18f, 131f, HudInk.paint(18f, HudInk.faded(HudInk.ivory, 0.78f)), 604f)
             val shortcut = if (visible.keyboardMode) "WASD 移动 · Q/E 旋转 · M 面板 · T 重试 · N 下一关"
-                else "张手背向自己横移：旋转 · 右掌朝自己：辅助面板"
+                else "右掌向前横移旋转 · 掌心朝自己或朝上 3 秒开面板"
             HudInk.text(canvas, shortcut, 18f, 165f, HudInk.paint(16f, HudInk.faded(HudInk.ivory, 0.7f)), 604f)
         }
     }

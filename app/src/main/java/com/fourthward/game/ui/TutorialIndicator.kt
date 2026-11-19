@@ -87,7 +87,7 @@ fun TutorialIndicator(status: TutorialStatus) {
         }
         Text(
             if (status.keyboardMode) "WASD 移动 · Q/E 旋转 · M 面板 · T 重试 · N 下一关"
-            else "张手背向自己横移：旋转 · 右掌朝自己：辅助面板",
+            else "右掌向前横移旋转 · 掌心朝自己或朝上 3 秒开面板",
             color = ivory.copy(alpha = 0.7f), fontSize = 16.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )

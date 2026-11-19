@@ -270,9 +270,7 @@ class RightPalmPanel(private val sceneRoot: Entity) {
             little = finger(HandJoint.Index.LITTLE_PROXIMAL, HandJoint.Index.LITTLE_INTERMEDIATE, HandJoint.Index.LITTLE_DISTAL, HandJoint.Index.LITTLE_TIP) ?: return null,
             sampleAgeSeconds = age,
         )
-        // Anatomical chirality changes the cross-product sign, not the openness criteria.
-        return if (isLeft) result.copy(palmNormal =
-            (result.index.base - result.wrist).cross(result.little.base - result.wrist)) else result
+        return result.copy(palmNormal = result.palmNormalFromJoints(isLeft))
     }
 }
 

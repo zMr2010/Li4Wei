@@ -49,15 +49,14 @@ class MotionPuzzlesTest {
         val resumed = game.world.spheres.single { it.id == "guide-light" }.center
         assertTrue((resumed - stopped).length() in .001.. .066)
         wait(game, 20.0)
-        assertEquals(14.0, game.motionTimeSeconds, 1e-8)
+        assertEquals(15.5, game.motionTimeSeconds, 1e-8)
+        assertEquals(setOf("light-amber"), game.level.expedition!!.checkpoints.map { it.id }.toSet())
+        assertTrue(game.world.spheres.none { it.id == "light-cyan" })
         game.rotate(-PI / 2)
         move(game, side = 2.4)
-        move(game, depth = -2.6)
         assertTrue(game.goalReady)
         assertFalse(game.completed)
-        wait(game, 2.0)
-        assertEquals(15.5, game.motionTimeSeconds, 1e-8)
-        move(game, depth = -.8)
+        move(game, depth = -3.4)
         assertTrue(game.completed)
     }
 
@@ -86,63 +85,76 @@ class MotionPuzzlesTest {
         }
     }
 
-    @Test fun driftingSolidActuallyBlocksThenMovesOutOfTheWay() {
+    @Test fun driftingSolidKillsOnContactButTheOpenRouteNeedsOnlyTheExit() {
         val game = game(1)
-        assertTrue(game.movePlanar(Vec3(0.0, 0.0, -4.0)).blocked)
-        assertTrue(game.playerFootWorld().w > -2.5)
-        assertTrue(game.completedCheckpointIds.isEmpty())
-        game.restartLevel()
+        game.movePlanar(Vec3(0.0, 0.0, -4.0))
+        assertRespawned(game)
+        assertTrue(game.level.expedition!!.checkpoints.isEmpty())
+        assertEquals(listOf("goal"), game.world.spheres.map { it.id })
         wait(game, 4.0)
         assertEquals(4.0, game.motionTimeSeconds, 1e-8)
         assertTrue(game.sections().none { it.source.id == "drifting-block" })
-        move(game, depth = -3.4)
-        assertEquals(setOf("drift-past"), game.completedCheckpointIds)
-        move(game, depth = -1.6)
+        move(game, depth = -5.0)
         assertTrue(game.completed)
     }
 
     @Test fun staggeredDoorsRequireTwoSeparateOpeningsAndHaveASafeMiddleRegion() {
         val game = game(2)
-        assertTrue(game.movePlanar(Vec3(0.0, 0.0, -3.1)).blocked)
-        game.restartLevel()
         wait(game, 4.0)
         move(game, depth = -3.1)
         assertEquals(setOf("gates-middle"), game.completedCheckpointIds)
-        assertTrue(game.movePlanar(Vec3(0.0, 0.0, -2.4)).blocked)
-        assertTrue(game.playerFootWorld().w > -4.7)
         assertFalse(game.completed)
-        // The player can retreat to the checkpoint while the second door is shut.
-        val blockedAt = game.playerFootWorld().w
-        move(game, depth = -3.1 - blockedAt)
         wait(game, 4.0)
         assertEquals(8.0, game.motionTimeSeconds, 1e-8)
+        assertEquals(0L, game.deathCount)
         move(game, depth = -2.4)
         assertEquals(setOf("gates-middle", "gates-far"), game.completedCheckpointIds)
         move(game, depth = -.8)
         assertTrue(game.completed)
     }
 
-    @Test fun closingDoorPausesAtThePlayerWithoutMovingTheCameraOrPassingThroughThem() {
+    @Test fun closingDoorRespawnsAtTheStartEvenAfterReachingACheckpoint() {
         val game = game(2)
-        game.updateTrackedHead(Vec3(.3, 1.7, -.4))
+        val head = Vec3(.3, 1.7, -.4)
+        game.updateTrackedHead(head)
         wait(game, 4.0)
-        move(game, depth = -2.0)
-        val feet = game.playerFootWorld()
-        val rawHead = game.trackedHead
+        move(game, depth = -3.1)
+        assertTrue(game.hasCheckpoint)
+        move(game, depth = 1.1)
+        assertTrue(game.rotate(.1))
+        while (game.deathCount == 0L && game.motionTimeSeconds < 8.0) game.tickWorld(.01)
+        assertRespawned(game)
+        assertFalse(game.hasCheckpoint)
+        assertEquals(head, game.trackedHead)
+        assertFalse(game.updateTrackedHead(head).changed)
+        point(game.level.start, game.playerFootWorld())
+        assertTrue(game.tickWorld(.1))
+        assertEquals(.1, game.motionTimeSeconds, 1e-8)
+    }
+
+    @Test fun returningDrifterAlsoKillsAStationaryPlayerInTheDoorway() {
+        val game = game(1)
         wait(game, 4.0)
-        assertTrue(game.motionBlocked)
-        assertTrue(game.motionTimeSeconds in 4.0..6.0)
-        val stoppedTime = game.motionTimeSeconds
-        wait(game, 2.0)
-        assertEquals(stoppedTime, game.motionTimeSeconds, 1e-8)
-        point(feet, game.playerFootWorld())
-        assertEquals(rawHead, game.trackedHead)
-        assertTrue(game.sections().filter { it.source.solid }.none {
-            SliceGeometry.intersectsCapsule(it, Vec3(rawHead.x, 0.0, rawHead.z), game.playerRadius, game.playerHeight)
-        })
-        move(game, depth = -1.1)
-        wait(game, .5)
-        assertTrue(game.motionTimeSeconds > stoppedTime)
+        move(game, depth = -2.5)
+        assertTrue(game.rotate(.08))
+        while (game.deathCount == 0L && game.motionTimeSeconds < 8.0) game.tickWorld(.01)
+        assertRespawned(game)
+    }
+
+    @Test fun physicalWalkingSweepsThroughHazardsWhileStaticWallsOnlyBlock() {
+        for (index in 1..2) {
+            val game = game(index)
+            val head = Vec3(.2, 1.7, .3)
+            game.updateTrackedHead(head)
+            val side = head + Vec3(5.0, 0.0, 0.0)
+            assertTrue(game.updateTrackedHead(side).blocked)
+            assertEquals(0L, game.deathCount)
+            game.restartLevel(head)
+            val beyondGate = head + Vec3(0.0, 0.0, -4.0)
+            game.updateTrackedHead(beyondGate)
+            assertRespawned(game)
+            assertEquals(beyondGate, game.trackedHead)
+        }
     }
 
     @Test fun checkpointRestoresTheClockTogetherWithTheReachedPose() {
@@ -157,7 +169,7 @@ class MotionPuzzlesTest {
         assertEquals(savedTime, game.motionTimeSeconds, 1e-8)
         assertEquals(setOf("gates-middle"), game.completedCheckpointIds)
         assertTrue(game.playerFootWorld().w in -3.1..-2.7)
-        assertFalse(game.motionBlocked)
+        assertEquals(0L, game.deathCount)
     }
 
     @Test fun movingSolidsKeepTheirShapesAndRepeatAfterEightSeconds() {
@@ -211,5 +223,14 @@ class MotionPuzzlesTest {
 
     private fun contains(box: Box4, point: Vec4): Boolean = (0..3).all { axis ->
         abs((point - box.center).dot(box.basis[axis])) <= box.halfExtents[axis] + 1e-8
+    }
+
+    private fun assertRespawned(game: FourthwardGame) {
+        assertEquals(1L, game.deathCount)
+        point(game.level.start, game.playerFootWorld())
+        assertEquals(Math.toDegrees(game.level.startAngleRadians), game.rotationDegrees, 1e-8)
+        assertEquals(0.0, game.motionTimeSeconds, 0.0)
+        assertTrue(game.completedCheckpointIds.isEmpty())
+        assertFalse(game.completed)
     }
 }

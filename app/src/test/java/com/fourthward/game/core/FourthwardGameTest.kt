@@ -265,6 +265,25 @@ class FourthwardGameTest {
         assertEquals(0.0, game.rotationDegrees, 0.0)
         assertVector(Vec4.ZERO, game.playerFootWorld())
     }
+
+    @Test fun enteringAndRetryingAStageUseItsAuthoredPositionAndSliceAngle() {
+        val previous = TutorialLevels.all().first()
+        val stage = TutorialLevels.all()[1].copy(start = Vec4(.8, -.3, .2, .7), startAngleRadians = PI / 3)
+        val game = FourthwardGame(listOf(previous, stage))
+        val head = Vec3(1.3, 1.69, -1.8)
+        game.updateTrackedHead(head)
+        game.rotate(.7)
+        game.movePlanar(Vec3(0.0, 0.0, -2.4))
+        assertTrue(game.nextLevel())
+        assertVector(stage.start, game.playerFootWorld())
+        assertEquals(60.0, game.rotationDegrees, 1e-8)
+        assertEquals(head, game.trackedHead)
+        game.rotate(.9)
+        game.movePlanar(Vec3(.25, 0.0, -.8))
+        game.restartLevel()
+        assertVector(stage.start, game.playerFootWorld())
+        assertEquals(60.0, game.rotationDegrees, 1e-8)
+    }
     @Test fun selectionUsesPersistentUnlocksAndCannotSkipOrResetProgress() {
         val saves = mutableListOf<Set<String>>()
         val levels = TutorialLevels.all()

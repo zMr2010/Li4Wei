@@ -24,6 +24,19 @@ class WorldArtSceneTest {
         vertices[index].toDouble(), vertices[index + 1].toDouble(), vertices[index + 2].toDouble(),
     )
 
+    @Test fun themeChangesGroundInkAndPreservesLevelGeometryAndWallPaint() {
+        val wall = Box4("wall", Vec4(0.0, 0.0, 1.1, -2.0), Vec4(1.4, .8, 1.4, .35))
+        val world = game(World4(listOf(wall), emptyList()))
+        val empty = game(World4(emptyList(), emptyList()))
+        val groundSize = VrSceneBuilder.build(empty, false).size
+        val light = VrSceneBuilder.build(world, false, UiThemeMode.LIGHT)
+        val dark = VrSceneBuilder.build(world, false, UiThemeMode.DARK)
+        assertEquals(light.size, dark.size)
+        assertTrue(light[3] > dark[3])
+        for (i in 0 until groundSize step 7) assertEquals(point(light, i), point(dark, i))
+        assertArrayEquals(light.copyOfRange(groundSize, light.size), dark.copyOfRange(groundSize, dark.size), 0f)
+    }
+
     @Test fun architecturalPaintStaysOnItsActualConvexFaceAtDifferentSliceAngles() {
         val box = Box4("wall", Vec4(0.0, 0.0, 1.1, -2.0), Vec4(1.4, .8, 1.4, .35))
         for (angle in listOf(0.0, .37, .91, PI / 2)) {

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="com.picovr.permission.HAND_TRACKING" />
+    <uses-feature android:name="android.hardware.vr.headtracking"
+        android:required="false" tools:replace="android:required" />
+
+    <application>
+        <meta-data android:name="pvr.app.type" android:value="vr" />
+        <meta-data android:name="handtracking" android:value="1" />
+    </application>
+</manifest>

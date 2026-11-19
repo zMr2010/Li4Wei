@@ -15,6 +15,7 @@ data class TutorialLevel(
     val expedition: ExpeditionDefinition? = null,
     val motionTopic: MotionTopic? = null,
     val motionPuzzle: MotionPuzzle? = null,
+    val startAngleRadians: Double = 0.0,
 )
 
 object TutorialLevels {

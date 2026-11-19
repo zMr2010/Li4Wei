@@ -420,7 +420,7 @@ internal object LessonSectionGeometry {
     }
 }
 
-private class LessonColor(private val hex: Int, val factor: Double = 1.0) {
+internal class LessonColor(private val hex: Int, val factor: Double = 1.0) {
     private fun channel(shift: Int): Float {
         val s = ((hex shr shift) and 255) / 255.0
         val linear = (if (s <= .04045) s / 12.92 else ((s + .055) / 1.055).pow(2.4)) * factor
@@ -431,7 +431,7 @@ private class LessonColor(private val hex: Int, val factor: Double = 1.0) {
     fun shade(amount: Double) = LessonColor(color, amount.coerceIn(0.0, 1.0))
 }
 
-private class LessonMesh(private val transform: (Vec3) -> Vec3) {
+internal class LessonMesh(private val transform: (Vec3) -> Vec3) {
     private var values = FloatArray(8192)
     private var size = 0
     private fun vertex(point: Vec3, color: LessonColor) = vertex(point, color.r, color.g, color.b)
@@ -535,6 +535,12 @@ private class LessonMesh(private val transform: (Vec3) -> Vec3) {
     fun face(points: List<Vec3>, color: LessonColor) {
         for (i in 1 until points.lastIndex) {
             vertex(points[0], color); vertex(points[i], color); vertex(points[i + 1], color)
+        }
+    }
+    fun gradientFace(points: List<Vec3>, colorAt: (Vec3) -> LessonColor) {
+        val colors = points.map(colorAt)
+        for (i in 1 until points.lastIndex) {
+            vertex(points[0], colors[0]); vertex(points[i], colors[i]); vertex(points[i + 1], colors[i + 1])
         }
     }
     fun loop(points: List<Vec3>, width: Double, color: LessonColor) {

@@ -5,6 +5,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InputStateTest {
+    @Test fun themeShortcutEmitsOneCommandPerPressAndPreservesHeldMovement() {
+        val state = input()
+        state.key(InputKey.FORWARD, true)
+        state.key(InputKey.THEME, true)
+        state.key(InputKey.THEME, true, repeat = true)
+        val frame = state.frame(.05, now)
+        assertEquals(listOf(InputCommand.TOGGLE_THEME), frame.commands)
+        assertTrue(frame.moveForwardMeters > 0.0)
+        assertTrue(state.frame(.05, now).commands.isEmpty())
+        state.key(InputKey.THEME, false)
+        state.key(InputKey.THEME, true)
+        assertEquals(listOf(InputCommand.TOGGLE_THEME), state.frame(.05, now).commands)
+    }
+
     private fun input() = InputState().apply { setEnabled(true) }
     private val now = 1_000_000_000L
 

@@ -1,9 +1,11 @@
 #pragma once
 #include <openxr/openxr.h>
 #include <android/log.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -11,15 +13,18 @@
 /** Standard OpenXR actions and optional EXT hand joints; all positions share the scene space. */
 class XrGameInput {
 public:
+    static constexpr size_t jointPositionFloats = XR_HAND_JOINT_COUNT_EXT * 3;
     struct Sample {
         std::array<float, 6> controls{};
-        std::array<std::array<float, 78>, 2> joints{};
+        // Positions followed by the optional palm orientation, xyzw. All zero means unavailable.
+        std::array<std::array<float, jointPositionFloats + 4>, 2> joints{};
         std::array<bool, 2> handValid{};
     };
     XrInstance instance = XR_NULL_HANDLE;
     XrSession session = XR_NULL_HANDLE;
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction aim = XR_NULL_HANDLE, stick = XR_NULL_HANDLE, trigger = XR_NULL_HANDLE;
+    XrAction select = XR_NULL_HANDLE;
     XrAction grip = XR_NULL_HANDLE, activate = XR_NULL_HANDLE, menu = XR_NULL_HANDLE, stickClick = XR_NULL_HANDLE;
     std::array<XrPath, 2> handPaths{};
     std::array<XrSpace, 2> aimSpaces{};
@@ -28,6 +33,8 @@ public:
     PFN_xrDestroyHandTrackerEXT destroyTracker = nullptr;
     PFN_xrLocateHandJointsEXT locateJoints = nullptr;
     bool handsSupported = false;
+    bool handDataSourceSupported = false;
+    std::array<bool, 2> suppressPointerClick{};
     uint64_t samples = 0;
 
     static void require(XrResult result, const char* operation) {
@@ -51,7 +58,7 @@ public:
         };
         for(int hand=0;hand<2;++hand){
             add(aim,hand,"/input/aim/pose");
-            if(simple){add(activate,hand,"/input/select/click");}
+            if(simple){add(select,hand,"/input/select/click");}
             else{
                 add(stick,hand,"/input/thumbstick");add(trigger,hand,"/input/trigger/value");
                 add(grip,hand,"/input/squeeze/value");add(stickClick,hand,"/input/thumbstick/click");
@@ -65,8 +72,9 @@ public:
         XrResult result=xrSuggestInteractionProfileBindings(instance,&info);
         __android_log_print(ANDROID_LOG_INFO,"FourthwardXR","Controller profile %s result=%d",profile,result);
     }
-    void initialize(XrInstance inInstance,XrSystemId system,XrSession inSession,bool enableHands) {
+    void initialize(XrInstance inInstance,XrSystemId system,XrSession inSession,bool enableHands, bool enableHandDataSource) {
         instance=inInstance;session=inSession;
+        handDataSourceSupported = enableHandDataSource;
         handPaths={path("/user/hand/left"),path("/user/hand/right")};
         XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
         std::strcpy(setInfo.actionSetName,"fourthward");std::strcpy(setInfo.localizedActionSetName,"Fourthward game controls");
@@ -75,6 +83,7 @@ public:
         stick=action("stick","Move and rotate",XR_ACTION_TYPE_VECTOR2F_INPUT);
         trigger=action("trigger","Select and activate",XR_ACTION_TYPE_FLOAT_INPUT);
         grip=action("grip","Reference and reset",XR_ACTION_TYPE_FLOAT_INPUT);
+        select=action("select","Select with pointer",XR_ACTION_TYPE_BOOLEAN_INPUT);
         activate=action("activate","Activate control",XR_ACTION_TYPE_BOOLEAN_INPUT);
         menu=action("menu","Toggle control panel",XR_ACTION_TYPE_BOOLEAN_INPUT);
         stickClick=action("stick_click","Restart and next level",XR_ACTION_TYPE_BOOLEAN_INPUT);
@@ -115,8 +124,9 @@ public:
         Sample out; ++samples;
         if(!focused)return out;
         XrActiveActionSet active{actionSet,XR_NULL_PATH};XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};sync.countActiveActionSets=1;sync.activeActionSets=&active;
+        int mask = 0;
+        std::array<bool, 2> selectPressed{}, triggerPressed{};
         if(XR_SUCCEEDED(xrSyncActions(session,&sync))){
-            int mask=0;
             for(int hand=0;hand<2;++hand){
                 XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};info.action=aim;info.subactionPath=handPaths[hand];
                 XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
@@ -130,16 +140,23 @@ public:
                 }
                 if(boolean(menu,hand))mask|=1;
                 if(boolean(activate,hand))mask|=2;
-                if(scalar(trigger,hand)>.65f)mask|=hand==0?64:2;
+                selectPressed[hand] = boolean(select,hand);
+                triggerPressed[hand] = scalar(trigger,hand) > .65f;
                 if(scalar(grip,hand)>.65f)mask|=hand==0?8:4;
                 if(boolean(stickClick,hand))mask|=hand==0?16:32;
             }
-            out.controls[5]=static_cast<float>(mask);
         }
         if(handsSupported){
             for(int hand=0;hand<2;++hand){
                 if(!trackers[hand]&&(samples==1||samples%180==0)){
                     XrHandTrackerCreateInfoEXT info{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};info.hand=hand==0?XR_HAND_LEFT_EXT:XR_HAND_RIGHT_EXT;info.handJointSet=XR_HAND_JOINT_SET_DEFAULT_EXT;
+                    // Controller-derived joint poses describe the hand wrapped around the hardware.
+                    // Request optical hands when the runtime can distinguish the two sources.
+                    XrHandTrackingDataSourceEXT source = XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT;
+                    XrHandTrackingDataSourceInfoEXT dataSource{XR_TYPE_HAND_TRACKING_DATA_SOURCE_INFO_EXT};
+                    dataSource.requestedDataSourceCount = 1;
+                    dataSource.requestedDataSources = &source;
+                    if (handDataSourceSupported) info.next = &dataSource;
                     XrResult result=createTracker(session,&info,&trackers[hand]);
                     __android_log_print(ANDROID_LOG_INFO,"FourthwardXR","Hand tracker hand=%d result=%d",hand,result);
                 }
@@ -148,15 +165,64 @@ public:
                 XrHandJointLocationsEXT locations{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};locations.jointCount=joints.size();locations.jointLocations=joints.data();
                 XrHandJointsLocateInfoEXT locate{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT};locate.baseSpace=base;locate.time=time;
                 if(XR_FAILED(locateJoints(trackers[hand],&locate,&locations))||!locations.isActive)continue;
-                bool valid=true;
-                for(size_t joint=0;joint<joints.size();++joint){
-                    const auto& p=joints[joint].pose.position;
-                    if(!(joints[joint].locationFlags&XR_SPACE_LOCATION_POSITION_VALID_BIT)||!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)){valid=false;break;}
-                    out.joints[hand][joint*3]=p.x;out.joints[hand][joint*3+1]=p.y;out.joints[hand][joint*3+2]=p.z;
+                // Let the gesture adapter decide which joints it needs. Losing a distal joint
+                // or an unused metacarpal must not cancel a tracked thumb/index drag.
+                for (size_t joint = 0; joint < joints.size(); ++joint) {
+                    const auto& location = joints[joint];
+                    const auto& p = location.pose.position;
+                    auto* xyz = out.joints[hand].data() + joint * 3;
+                    if ((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
+                        std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z)) {
+                        xyz[0] = p.x;
+                        xyz[1] = p.y;
+                        xyz[2] = p.z;
+                    } else {
+                        std::fill_n(xyz, 3, std::numeric_limits<float>::quiet_NaN());
+                    }
                 }
-                out.handValid[hand]=valid;
+                const auto& positions = out.joints[hand];
+                out.handValid[hand] = std::isfinite(positions[XR_HAND_JOINT_THUMB_TIP_EXT * 3]) &&
+                                      std::isfinite(positions[XR_HAND_JOINT_INDEX_TIP_EXT * 3]);
+                const auto& palm = joints[XR_HAND_JOINT_PALM_EXT];
+                if (!(palm.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) continue;
+                const auto& q = palm.pose.orientation;
+                // Position-only streams can fill every joint rotation with the same placeholder.
+                const bool uniformRotations = std::all_of(joints.begin(), joints.end(), [&](const auto& joint) {
+                    const auto& r = joint.pose.orientation;
+                    return (joint.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
+                           std::abs(q.x*r.x + q.y*r.y + q.z*r.z + q.w*r.w) >= 0.99999f;
+                });
+                if (!uniformRotations) {
+                    auto* orientation = out.joints[hand].data() + jointPositionFloats;
+                    orientation[0] = q.x;
+                    orientation[1] = q.y;
+                    orientation[2] = q.z;
+                    orientation[3] = q.w;
+                }
             }
         }
+        // Some runtimes expose one optical pinch as joints AND a controller select/trigger.
+        // Latch its source until release, including through a hand-tracking dropout.
+        for (int hand = 0; hand < 2; ++hand) {
+            if (!selectPressed[hand] && !triggerPressed[hand]) {
+                suppressPointerClick[hand] = false;
+                continue;
+            }
+            if (out.handValid[hand]) {
+                const auto& joints = out.joints[hand];
+                float gapSquared = 0.f;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const float delta = joints[XR_HAND_JOINT_THUMB_TIP_EXT * 3 + axis] -
+                                        joints[XR_HAND_JOINT_INDEX_TIP_EXT * 3 + axis];
+                    gapSquared += delta * delta;
+                }
+                if (gapSquared <= .055f * .055f) suppressPointerClick[hand] = true;
+            }
+            if (suppressPointerClick[hand]) continue;
+            if (selectPressed[hand]) mask |= 2;
+            if (triggerPressed[hand]) mask |= hand == 0 ? 64 : 2;
+        }
+        out.controls[5] = static_cast<float>(mask);
         if(samples%180==0)__android_log_print(ANDROID_LOG_INFO,"FourthwardXR","Input controllers=%d,%d hands=%d,%d",out.controls[0]>.5f,out.controls[1]>.5f,out.handValid[0],out.handValid[1]);
         return out;
     }

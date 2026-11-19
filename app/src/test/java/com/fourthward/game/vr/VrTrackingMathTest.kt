@@ -42,6 +42,29 @@ class VrTrackingMathTest {
         }
     }
 
+    @Test fun startMapIsInFrontOfThePlayerWithinReachAndItsHitPlaneFacesTheirEyes() {
+        for (yaw in listOf(0.0, PI / 2, PI, -PI / 2)) {
+            val head = facing(yaw, pitch = PI / 4, roll = PI / 6).copy(position = Vec3(2.3, 1.2, -3.7))
+            val panel = VrTrackingMath.startPanelPose(head)!!
+            val forward = Vec3(-sin(yaw), 0.0, -cos(yaw))
+            val right = Vec3(cos(yaw), 0.0, -sin(yaw))
+            assertVector(head.position + forward * .56 - right * .19 - Vec3(0.0, .085, 0.0), panel.position)
+            val toEyes = head.position - panel.position
+            assertVector(toEyes * (1.0 / toEyes.length()), panel.normal)
+            assertEquals(0.0, panel.right.y, 1e-9)
+            val layout = LevelDependencyGraph(TutorialLevels.all()).window(0, PalmAction.CONTEXT).layout
+            for (button in layout.buttons) {
+                val x = (button.left + button.right) * .5
+                val y = (button.top + button.bottom) * .5
+                val target = panel.position + panel.right * ((x - .5) * layout.widthMeters) +
+                    panel.up * ((.5 - y) * layout.heightMeters)
+                val hit = VrTrackingMath.pointer(target, panel, layout.widthMeters, layout.heightMeters)
+                assertEquals(button.action, layout.hitTest(hit.x, hit.y))
+                assertTrue((target - head.position).length() < .70)
+            }
+        }
+    }
+
     @Test fun heldForwardUpdatesWithHeadTurnAndSliceAngleIsAppliedOnlyOnce() {
         val input = InputState().apply { setEnabled(true); key(InputKey.FORWARD, true) }
         val first = input.frame(.05, 0)
@@ -60,6 +83,26 @@ class VrTrackingMathTest {
         assertEquals(90.0, game.rotationDegrees, 1e-9)
     }
 
+    @Test fun opticalPullFollowsFullViewDirectionIncludingVerticalGazeAndStopsAtTheFloor() {
+        val meters = .25
+        for (pitch in listOf(-PI / 2, -PI / 4, PI / 4, PI / 2)) {
+            val yaw = PI / 3
+            val head = facing(yaw, pitch, roll = PI / 6)
+            val forward = Vec3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+            assertVector(forward * meters, VrTrackingMath.pullMovement(head, meters))
+            assertVector(Vec3(-sin(yaw), 0.0, -cos(yaw)) * meters,
+                VrTrackingMath.locomotion(facing(yaw, pitch), 0.0, meters))
+        }
+        val up = facing(0.0, PI / 2)
+        val down = facing(0.0, -PI / 2)
+        val game = FourthwardGame()
+        game.updateTrackedHead(up.position)
+        assertTrue(game.move(VrTrackingMath.pullMovement(up, meters)).changed)
+        assertEquals(meters, game.playerFootWorld().z, 1e-7)
+        assertTrue(game.move(VrTrackingMath.pullMovement(down, 2 * meters)).blocked)
+        assertEquals(0.0, game.playerFootWorld().z, 1e-7)
+    }
+
     @Test fun headTranslationIsUnboundedAndQuaternionIsXyzwWithoutChangingTheGameAngle() {
         val pose = VrTrackingMath.head(floatArrayOf(4.3f, 1.7f, -5.2f, 0f, 0f, 0f, 1f))!!
         assertVector(Vec3(4.3, 1.7, -5.2), pose.position, 3e-7)
@@ -75,6 +118,28 @@ class VrTrackingMathTest {
         assertEquals(-0.3, game.playerFootWorld().w, 3e-7)
         assertEquals(1.5, game.playerWorld().z, 1e-8)
         assertVector(Vec3(0.0, 0.0, -1.0), VrTrackingMath.horizontalRight(moved)!!)
+    }
+
+    @Test fun movingBoxStartsAheadAfterAHeadTurnAndWalkInThePreviousScene() {
+        val boxLevel = MotionStudyLevels.all().single { it.motionTopic == MotionTopic.MOVING_BOX }
+        val game = FourthwardGame(listOf(boxLevel))
+        val head = facing(PI / 2).copy(position = Vec3(1.6, 1.7, -2.4))
+        val space = VrTrackingMath.levelSpace(head)
+        game.restartLevel(space.localPosition(head.position))
+        assertEquals(boxLevel.start, game.playerFootWorld())
+        assertVector(Vec3(0.0, 0.0, -1.0), space.localVector(head.normal * -1.0))
+        val exhibit = game.frame.local(Vec4(0.0, 0.0, MotionStudies.displayCenter.y, MotionStudies.displayCenter.z))
+        val model = space.worldModel
+        val rawExhibit = Vec3(
+            model[0] * exhibit.x + model[8] * exhibit.z + model[12],
+            exhibit.y, model[2] * exhibit.x + model[10] * exhibit.z + model[14],
+        )
+        assertVector(Vec3(-.8, 1.3, -2.4), rawExhibit, 2e-7)
+        val walk = VrTrackingMath.locomotion(head, 0.0, .2)
+        game.updateTrackedHead(space.localPosition(head.position + walk))
+        assertEquals(-.2, game.playerFootWorld().w, 1e-8)
+        val respawn = VrTrackingMath.levelSpace(facing(PI).copy(position = head.position + walk), game.trackedHead)
+        assertVector(game.trackedHead, respawn.localPosition(head.position + walk))
     }
 
     @Test fun nonUnitQuaternionNormalizesAndInvalidHeadDataIsRejected() {
@@ -107,17 +172,106 @@ class VrTrackingMathTest {
         assertVector(Vec3(-0.026, 0.065, 0.0), right.index.base)
         assertVector(Vec3(-0.033, 0.130, 0.0), right.index.tip)
         assertVector(Vec3(0.044, 0.106, 0.0), right.little.tip)
-        assertTrue(right.palmNormal!!.z > 0.0)
-        assertTrue(left.palmNormal!!.z > 0.0)
+        // Upright fingers and right thumb on the wearer's left expose the back to the wearer.
+        assertVector(Vec3(0.0, 0.0, -1.0), right.palmNormal!!)
+        assertVector(Vec3(0.0, 0.0, -1.0), left.palmNormal!!)
         for (hand in listOf(right, left)) {
             val state = HandPanelGesture().update(hand, Vec3(0.0, 0.03, 0.6), 0.05)
-            assertTrue(state.validTracking && state.isOpen && state.isFacingHead)
+            assertTrue(state.validTracking && state.isOpen)
+            assertFalse(state.isFacingHead)
         }
         assertNull(VrTrackingMath.hand(null, false))
         assertNull(VrTrackingMath.hand(FloatArray(77), false))
         assertNull(VrTrackingMath.hand(FloatArray(78), false))
         val invalid = joints(); invalid[10 * 3] = Float.NaN
         assertNull(VrTrackingMath.hand(invalid, false))
+    }
+
+    @Test fun missingDistalOrMetacarpalPositionsStillProvideALiveFingerButMissingTipsCancelInput() {
+        val sample = joints()
+        for (joint in listOf(4, 6, 9, 11, 14, 16, 19, 21, 24)) sample.fill(Float.NaN, joint * 3, joint * 3 + 3)
+        val hand = checkNotNull(VrTrackingMath.hand(sample, false))
+        assertNull(hand.index.distal)
+        assertVector(Vec3(-.033, .130, 0.0), hand.index.tip)
+        for (joint in listOf(15, 18, 25)) sample.fill(Float.NaN, joint * 3, joint * 3 + 3)
+        val partial = checkNotNull(VrTrackingMath.hand(sample, false))
+        val contact = HandContactGesture()
+        assertTrue(checkNotNull(contact.update(partial, .02)).indexExtended)
+        val pinched = partial.copy(thumb = partial.thumb.copy(tip = partial.index.tip + Vec3(.020, 0.0, 0.0)))
+        assertTrue(checkNotNull(contact.update(pinched, .02)).pinchStarted)
+        assertFalse(HandPanelGesture().update(partial, Vec3(0.0, 0.0, .5), .02).validTracking)
+        for (tip in listOf(5, 10)) {
+            val lost = sample.clone().apply { fill(Float.NaN, tip * 3, tip * 3 + 3) }
+            assertNull(VrTrackingMath.hand(lost, false))
+        }
+    }
+
+    @Test fun palmJointOrientationDefinesTheAnatomicalPalmForBothHands() {
+        val half = sin(PI / 4).toFloat()
+        // +90 degrees about X puts local -Z along the fingers (+Y) and local -Y toward -Z.
+        val orientation = floatArrayOf(half, 0f, 0f, half)
+        for (left in listOf(false, true)) {
+            val positions = joints(mirror = left)
+            val positional = VrTrackingMath.hand(positions, isLeft = left)!!
+            val tracked = VrTrackingMath.hand(positions + orientation, isLeft = left)!!
+            assertVector(Vec3(0.0, 0.0, -1.0), positional.palmNormal!!)
+            assertVector(Vec3(0.0, 0.0, -1.0), tracked.palmNormal!!)
+            assertEquals(positional.copy(palmNormal = tracked.palmNormal), tracked)
+        }
+    }
+
+    @Test fun absentOrInconsistentPalmRotationRetainsValidJointPositionsAndTheirFallbackNormal() {
+        val positions = joints()
+        val positional = VrTrackingMath.hand(positions, false)!!
+        for (invalid in listOf(
+            floatArrayOf(), FloatArray(3), FloatArray(4), floatArrayOf(Float.NaN, 0f, 0f, 1f),
+            floatArrayOf(0f, 0f, 0f, 3f), floatArrayOf(0f, 0f, 0f, 1f), // -Z misses the fingers
+            floatArrayOf(.5f, .5f, -.5f, .5f), // -Z agrees, but -Y points along the palm plane
+            floatArrayOf(0f, .70710677f, -.70710677f, 0f), // -Z agrees, but the palm is reversed
+        )) {
+            assertEquals(positional, VrTrackingMath.hand(positions + invalid, false))
+        }
+    }
+
+    @Test fun questCapturedLeftHandAndItsRightMirrorAgreeWithTheRecordedMetacarpalAxes() {
+        // Meta IWER relaxed.ts, f05f2e4: XYZ translations and the middle metacarpal's
+        // orientation, recorded on Quest 3. IWER mirrors the left reference across X for the right.
+        val recordedPalm = Vec3(-.000535, -.864864, -.502006) // minus matrix column Y
+        for (left in listOf(true, false)) {
+            val mirror = if (left) 1 else -1
+            val positions = FloatArray(78)
+            fun put(joint: Int, x: Float, y: Float, z: Float) {
+                floatArrayOf(x * mirror, y, z).copyInto(positions, joint * 3)
+            }
+            put(1, -.049136f, .002146f, .117020f)  // wrist
+            put(7, -.000177f, .038900f, .039073f)  // index MCP
+            put(11, -.036278f, .011580f, .085501f) // middle metacarpal base
+            put(12, -.021260f, .045873f, .036592f) // middle MCP
+            put(22, -.061502f, .032741f, .037051f) // little MCP
+            val expected = recordedPalm.copy(x = recordedPalm.x * mirror)
+            val fromPositions = VrTrackingMath.hand(positions, left)!!.palmNormal!!
+            assertTrue(fromPositions.dot(expected) > .98)
+            val rotation = floatArrayOf(.257402f, -.133562f * mirror, -.036228f * mirror, .956344f)
+            val fromPose = VrTrackingMath.hand(positions + rotation, left)!!.palmNormal!!
+            assertVector(expected, fromPose, .000003)
+        }
+    }
+
+    @Test fun bridgeSynthesizedPalmIsRestoredToTheMiddleMetacarpalWhileNativeCentersArePreserved() {
+        val positions = joints()
+        fun joint(index: Int) = Vec3(positions[index * 3].toDouble(), positions[index * 3 + 1].toDouble(),
+            positions[index * 3 + 2].toDouble())
+        fun withPalm(p: Vec3) = positions.clone().also {
+            floatArrayOf(p.x.toFloat(), p.y.toFloat(), p.z.toFloat()).copyInto(it)
+        }
+        val wrist = joint(1)
+        val metacarpal = joint(11)
+        val mcp = joint(12)
+        val center = (metacarpal + mcp) * .5
+        val approximated = (wrist + metacarpal) * .5
+        assertVector(center, VrTrackingMath.hand(withPalm(approximated), false)!!.palm)
+        val nativeCenter = center + Vec3(.001, .002, .004)
+        assertVector(nativeCenter, VrTrackingMath.hand(withPalm(nativeCenter), false)!!.palm)
     }
 
     @Test fun billboardPanelUsesSameMetricCoordinatesAsPhysicalPoke() {

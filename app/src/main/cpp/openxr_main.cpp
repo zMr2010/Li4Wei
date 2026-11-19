@@ -24,6 +24,8 @@ void check(XrResult r, const char* operation) {
 }
 #define XR_CHECK(call) check((call), #call)
 using Matrix = std::array<float, 16>;
+constexpr Matrix identity{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+constexpr jsize uiQuadStride = 21;
 Matrix multiply(const Matrix& a, const Matrix& b) {
     Matrix out{};
     for (int col = 0; col < 4; ++col) for (int row = 0; row < 4; ++row)
@@ -99,6 +101,38 @@ out vec4 outColor;
 vec3 linear(vec3 c){return mix(c/12.92,pow((c+0.055)/1.055,vec3(2.4)),step(vec3(0.04045),c));}
 void main(){outColor=vec4(uLinearize?linear(vColor.rgb):vColor.rgb,vColor.a);}
 )";
+// The start exhibit shares the streaming VBO, with W in the otherwise unused opacity lane.
+// Project the rotating solid into 3-space first; the two OpenXR cameras then see real stereo.
+const char* exhibitVertex = R"(#version 300 es
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec4 aMaterial;
+uniform mat4 uMvp;
+uniform mat4 uProjection4;
+uniform vec4 uCenterAndFocal;
+out vec3 vPosition;
+out vec3 vMaterial;
+void main(){
+    vec4 point = uProjection4 * vec4(aPosition, aMaterial.a);
+    vPosition = uCenterAndFocal.xyz + point.xyz / (uCenterAndFocal.w - point.w);
+    vMaterial = aMaterial.rgb;
+    gl_Position = uMvp * vec4(vPosition, 1.0);
+}
+)";
+const char* exhibitFragment = R"(#version 300 es
+precision highp float;
+in vec3 vPosition;
+in vec3 vMaterial;
+out vec4 outColor;
+void main(){
+    vec3 n = normalize(cross(dFdx(vPosition), dFdy(vPosition)));
+    vec3 base = mix(vMaterial/12.92, pow((vMaterial+.055)/1.055, vec3(2.4)), step(vec3(.04045), vMaterial));
+    float key = max(0.0, dot(n, normalize(vec3(-.52,.72,.56))));
+    float fill = max(0.0, dot(n, normalize(vec3(.82,.15,-.45))));
+    float glint = pow(max(0.0, dot(n, normalize(vec3(-.43,.56,.71)))), 28.0);
+    vec3 lit = base * (.38 + .63*key) + vec3(.025,.035,.039)*fill + vec3(.12,.12,.105)*glint;
+    outColor = vec4(lit,1.0);
+}
+)";
 const char* uiVertex = R"(#version 300 es
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec2 aUv;
@@ -141,14 +175,20 @@ public:
     std::vector<Swapchain> swapchains;
     GLuint framebuffer = 0, worldProgram = 0, uiProgram = 0, worldVao = 0, worldVbo = 0;
     GLuint uiVao = 0, uiVbo = 0, uiTexture = 0;
-    GLuint effectsVao = 0, effectsVbo = 0;
+    GLuint effectsVao = 0, effectsVbo = 0, exhibitProgram = 0;
+    GLint exhibitMvp = -1, exhibitMatrix = -1, exhibitCenter = -1;
+    std::array<float, 20> exhibitProjection{};
+    bool drawingExhibit = false;
+    bool lightEnvironment = true;
     GLsizei worldCount = 0;
     GLsizei effectsCount = 0;
     bool textureReady = false;
     std::vector<float> quads;
+    Matrix worldModel = identity;
     jobject bridge = nullptr;
     jmethodID frameMethod = nullptr, focusMethod = nullptr;
     jfieldID verticesField = nullptr, bitmapField = nullptr, quadsField = nullptr, effectsField = nullptr;
+    jfieldID worldModelField = nullptr, exhibitProjectionField = nullptr, lightEnvironmentField = nullptr;
     XrTime previousTime = 0;
     uint64_t frames = 0;
     uint64_t textureUploads = 0;
@@ -214,6 +254,8 @@ public:
         for (const char* e: extensions) if (!supports(e)) throw std::runtime_error(std::string("Missing required extension ")+e);
         const bool handTracking = supports(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
         if (handTracking) extensions.push_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        const bool handDataSource = handTracking && supports(XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
+        if (handDataSource) extensions.push_back(XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
         if (supports("XR_BD_controller_interaction")) extensions.push_back("XR_BD_controller_interaction");
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
         androidInfo.applicationVM = app->activity->vm; androidInfo.applicationActivity = app->activity->clazz;
@@ -251,7 +293,7 @@ public:
         INFO("Reference space=%s OPAQUE native VR", type==XR_REFERENCE_SPACE_TYPE_STAGE?"STAGE":"LOCAL");
         reference.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_VIEW;
         XR_CHECK(xrCreateReferenceSpace(session,&reference,&headSpace));
-        input.initialize(instance, system, session, handTracking);
+        input.initialize(instance, system, session, handTracking, handDataSource);
         createSwapchains(); createGraphics();
         initialized=true; INFO("Native OpenXR initialized, waiting for READY");
     }
@@ -286,6 +328,10 @@ public:
     }
     void createGraphics(){
         worldProgram=program(worldVertex,worldFragment);uiProgram=program(uiVertex,uiFragment);
+        exhibitProgram=program(exhibitVertex,exhibitFragment);
+        exhibitMvp=glGetUniformLocation(exhibitProgram,"uMvp");
+        exhibitMatrix=glGetUniformLocation(exhibitProgram,"uProjection4");
+        exhibitCenter=glGetUniformLocation(exhibitProgram,"uCenterAndFocal");
         glGenFramebuffers(1,&framebuffer);
         glGenVertexArrays(1,&worldVao);glGenBuffers(1,&worldVbo);glBindVertexArray(worldVao);glBindBuffer(GL_ARRAY_BUFFER,worldVbo);
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,7*sizeof(float),nullptr);
@@ -345,23 +391,41 @@ public:
                 }
             }else if(frames%90==0)INFO("Pose valid=0 flags=%llu",static_cast<unsigned long long>(head.locationFlags));
             const auto sample = input.sample(space,time,xrInputFocused);
-            jfloatArray leftHand = sample.handValid[0] ? array(sample.joints[0].data(),78) : nullptr;
-            jfloatArray rightHand = sample.handValid[1] ? array(sample.joints[1].data(),78) : nullptr;
+            jfloatArray leftHand = sample.handValid[0] ? array(sample.joints[0].data(),sample.joints[0].size()) : nullptr;
+            jfloatArray rightHand = sample.handValid[1] ? array(sample.joints[1].data(),sample.joints[1].size()) : nullptr;
             const float dt=previousTime?std::clamp(static_cast<float>((time-previousTime)*1e-9),0.f,.05f):1.f/72.f;
             previousTime=time;
             jobject frame=env->CallObjectMethod(bridge,frameMethod,dt,javaHead,leftHand,rightHand,array(sample.controls.data(),6));javaCheck("frame");
             if(!frame)throw std::runtime_error("VrGameBridge.frame returned null");
             if(!verticesField){
                 jclass klass=env->GetObjectClass(frame);
-                verticesField=env->GetFieldID(klass,"worldVertices","[F");bitmapField=env->GetFieldID(klass,"uiBitmap","Landroid/graphics/Bitmap;");quadsField=env->GetFieldID(klass,"uiQuads","[F");effectsField=env->GetFieldID(klass,"effectsVertices","[F");javaCheck("frame fields");
+                verticesField=env->GetFieldID(klass,"worldVertices","[F");bitmapField=env->GetFieldID(klass,"uiBitmap","Landroid/graphics/Bitmap;");quadsField=env->GetFieldID(klass,"uiQuads","[F");effectsField=env->GetFieldID(klass,"effectsVertices","[F");
+                worldModelField=env->GetFieldID(klass,"worldModel","[F");
+                exhibitProjectionField=env->GetFieldID(klass,"exhibitProjection","[F");
+                lightEnvironmentField=env->GetFieldID(klass,"lightEnvironment","Z");javaCheck("frame fields");
             }
             auto vertices=static_cast<jfloatArray>(env->GetObjectField(frame,verticesField));
             if(vertices){
                 const jsize n=env->GetArrayLength(vertices);
                 if(n%21!=0)throw std::runtime_error("worldVertices must be xyzrgba triangles");
+                auto model=static_cast<jfloatArray>(env->GetObjectField(frame,worldModelField));
+                worldModel=identity;
+                if(model){
+                    const auto size=static_cast<jsize>(worldModel.size());
+                    if(env->GetArrayLength(model)!=size)throw std::runtime_error("worldModel must be a 4x4 matrix");
+                    env->GetFloatArrayRegion(model,0,size,worldModel.data());
+                }
                 jfloat* data=env->GetFloatArrayElements(vertices,nullptr);
                 glBindBuffer(GL_ARRAY_BUFFER,worldVbo);glBufferData(GL_ARRAY_BUFFER,n*sizeof(float),data,GL_DYNAMIC_DRAW);
                 env->ReleaseFloatArrayElements(vertices,data,JNI_ABORT);worldCount=n/7;
+            }
+            lightEnvironment=env->GetBooleanField(frame,lightEnvironmentField);
+            auto exhibit=static_cast<jfloatArray>(env->GetObjectField(frame,exhibitProjectionField));
+            drawingExhibit=exhibit!=nullptr;
+            if(exhibit){
+                const auto size=static_cast<jsize>(exhibitProjection.size());
+                if(env->GetArrayLength(exhibit)!=size)throw std::runtime_error("exhibitProjection requires a 4D matrix and center/focal vector");
+                env->GetFloatArrayRegion(exhibit,0,size,exhibitProjection.data());
             }
             auto effects=static_cast<jfloatArray>(env->GetObjectField(frame,effectsField));
             if(effects){
@@ -370,7 +434,7 @@ public:
                 effectsCount=n/7;
                 if(n){
                     jfloat* data=env->GetFloatArrayElements(effects,nullptr);
-                    glBindBuffer(GL_ARRAY_BUFFER,effectsVbo);glBufferData(GL_ARRAY_BUFFER,n*sizeof(float),data,GL_STREAM_DRAW);
+                    glBindBuffer(GL_ARRAY_BUFFER,effectsVbo);glBufferData(GL_ARRAY_BUFFER,n*sizeof(float),data,drawingExhibit?GL_STATIC_DRAW:GL_STREAM_DRAW);
                     env->ReleaseFloatArrayElements(effects,data,JNI_ABORT);
                 }
             }
@@ -390,7 +454,7 @@ public:
             }
             auto javaQuads=static_cast<jfloatArray>(env->GetObjectField(frame,quadsField));
             const jsize n=javaQuads?env->GetArrayLength(javaQuads):0;
-            if(n%22!=0)throw std::runtime_error("uiQuads stride must be 22");
+            if(n%uiQuadStride!=0)throw std::runtime_error("uiQuads stride must be 21");
             quads.resize(n);if(n)env->GetFloatArrayRegion(javaQuads,0,n,quads.data());
             javaCheck("frame arrays");env->PopLocalFrame(nullptr);
         }catch(...){env->PopLocalFrame(nullptr);throw;}
@@ -404,26 +468,36 @@ public:
         glViewport(0,0,target.width,target.height);glDisable(GL_SCISSOR_TEST);glDisable(GL_CULL_FACE);
         // OpenXR interprets RGBA8 as linear light. An sRGB target applies its own transfer
         // encoding; in either case authored sRGB inputs must be decoded before shading.
-        glDepthMask(GL_TRUE);glClearColor(.003347f,.005182f,.006995f,1);glClearDepthf(1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        // The open stage is neutral slate so white walls and teaching wires keep their silhouettes.
+        if(lightEnvironment) glClearColor(.095f,.115f,.117f,1.f);
+        else glClearColor(.0056f,.0075f,.007f,1.f);
+        glDepthMask(GL_TRUE);glClearDepthf(1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
         Matrix viewProjection=multiply(projection(views[eye].fov),inversePose(views[eye].pose));
-        glUseProgram(worldProgram);glUniformMatrix4fv(glGetUniformLocation(worldProgram,"uMvp"),1,GL_FALSE,viewProjection.data());
+        Matrix worldMvp=multiply(viewProjection,worldModel);
+        glUseProgram(worldProgram);glUniformMatrix4fv(glGetUniformLocation(worldProgram,"uMvp"),1,GL_FALSE,worldMvp.data());
         glUniform1i(glGetUniformLocation(worldProgram,"uLinearize"),GL_TRUE);
         glBindVertexArray(worldVao);glDrawArrays(GL_TRIANGLES,0,worldCount);
-        // Small translucent HUD markers have their own streaming buffer. They are occluded
-        // by real sections but never write depth or require rebuilding the collision world.
         if(effectsCount){
-            glDepthMask(GL_FALSE);glBindVertexArray(effectsVao);glDrawArrays(GL_TRIANGLES,0,effectsCount);
+            if(drawingExhibit){
+                glUseProgram(exhibitProgram);
+                glUniformMatrix4fv(exhibitMvp,1,GL_FALSE,worldMvp.data());
+                glUniformMatrix4fv(exhibitMatrix,1,GL_FALSE,exhibitProjection.data());
+                glUniform4fv(exhibitCenter,1,exhibitProjection.data()+16);
+            }
+            // Opaque exhibit pieces occlude each other. Gameplay markers only read depth.
+            glDepthMask(drawingExhibit?GL_TRUE:GL_FALSE);
+            glBindVertexArray(effectsVao);glDrawArrays(GL_TRIANGLES,0,effectsCount);
         }
         if(textureReady&&!quads.empty()){
             glUseProgram(uiProgram);glUniform1i(glGetUniformLocation(uiProgram,"uLinearize"),GL_TRUE);glUniform1i(glGetUniformLocation(uiProgram,"uTexture"),0);
             glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,uiTexture);glBindVertexArray(uiVao);glBindBuffer(GL_ARRAY_BUFFER,uiVbo);
-            glBlendFunc(GL_ONE,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);
-            for(size_t i=0;i<quads.size();i+=22){
+            // Panels and HUD draw last in tracking space, above every scene object.
+            glBlendFunc(GL_ONE,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);glDisable(GL_DEPTH_TEST);
+            for(size_t i=0;i<quads.size();i+=uiQuadStride){
                 const float* record=quads.data()+i;Matrix model{};std::copy(record,record+16,model.begin());
-                if(record[20]>.5f)glEnable(GL_DEPTH_TEST);else glDisable(GL_DEPTH_TEST);
                 const Matrix mvp=multiply(viewProjection,model);glUniformMatrix4fv(glGetUniformLocation(uiProgram,"uMvp"),1,GL_FALSE,mvp.data());
-                glUniform1f(glGetUniformLocation(uiProgram,"uOpacity"),record[21]);
+                glUniform1f(glGetUniformLocation(uiProgram,"uOpacity"),record[20]);
                 const float l=record[16],t=record[17],r=record[18],b=record[19];
                 const float data[]={-.5f,.5f,0,l,t, -.5f,-.5f,0,l,b, .5f,-.5f,0,r,b,
                                      -.5f,.5f,0,l,t, .5f,-.5f,0,r,b, .5f,.5f,0,r,t};
@@ -472,6 +546,7 @@ public:
             if(effectsVbo)glDeleteBuffers(1,&effectsVbo);
             if(worldVao)glDeleteVertexArrays(1,&worldVao);if(uiVao)glDeleteVertexArrays(1,&uiVao);
             if(effectsVao)glDeleteVertexArrays(1,&effectsVao);
+            if(exhibitProgram)glDeleteProgram(exhibitProgram);
             if(uiTexture)glDeleteTextures(1,&uiTexture);if(worldProgram)glDeleteProgram(worldProgram);if(uiProgram)glDeleteProgram(uiProgram);
         }
         for(auto& target:swapchains)if(target.handle)xrDestroySwapchain(target.handle);

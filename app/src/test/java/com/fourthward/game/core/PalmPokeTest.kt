@@ -31,6 +31,19 @@ class PalmPokeTest {
         assertEquals(PalmAction.RESET_ANGLE, detector.sample(depth = 0.008).action)
     }
 
+    @Test fun lessonAndGameOfferThemeSwitchWithoutLosingTheRouteButton() {
+        for (layout in listOf(PalmPanelLayout.lessonMenu, PalmPanelLayout.game)) {
+            val theme = layout.buttons.single { it.action == PalmAction.TOGGLE_THEME }
+            val x = (theme.left + theme.right) / 2
+            val y = (theme.top + theme.bottom) / 2
+            val poke = PalmPoke()
+            poke.update(x, y, .045, true, .016, layout)
+            assertEquals(PalmAction.TOGGLE_THEME, poke.update(x, y, .006, true, .016, layout).action)
+            assertNull(poke.update(x, y, .006, true, .016, layout).action)
+            assertTrue(layout.buttons.any { it.action == PalmAction.LEVEL_LIST })
+        }
+    }
+
     @Test fun firstSampleAtOrBehindPlaneCannotFire() {
         for (depth in listOf(0.0, -0.01, -0.1, 0.008)) {
             val detector = PalmPoke()

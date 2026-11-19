@@ -13,6 +13,7 @@ data class HandSwipeRotationConfig(
     val staleAfterSeconds: Double = 0.12,
     val facingEnterDot: Double = 0.65,
     val facingHoldDot: Double = 0.50,
+    val facingSurface: HandSurface = HandSurface.BACK,
 ) {
     init {
         require(activationSeconds.isFinite() && activationSeconds >= 0.0)
@@ -26,20 +27,19 @@ data class HandSwipeRotationConfig(
 
 data class HandSwipeRotationState(val active: Boolean = false, val deltaRadians: Double = 0.0)
 
-/** Open hand, palm AWAY from the camera: horizontal motion changes the sole slice angle.
+/** Horizontal motion of an open hand with the configured surface facing the camera changes the slice angle.
  * All positions share stage space. Supply the hand's outward anatomical palm normal:
- * right uses (little.base-wrist) x (index.base-wrist); left uses the opposite cross product.
+ * [HandLandmarks.palmNormalFromJoints] computes it for either hand.
  * Omitting palmNormal retains the classifier's right-hand convention.
  * Camera yaw/right is locked at activation, so turning the head cannot rotate the input axis. */
 class HandSwipeRotation(private val config: HandSwipeRotationConfig = HandSwipeRotationConfig()) {
-    // Reflecting the camera through the palm reuses the existing signed, five-finger predicate:
-    // facing the reflected camera is exactly palmNormal dot directionToRealCamera <= -threshold.
     private val pose = HandPanelGesture(HandPanelGestureConfig(
         showSeconds = config.activationSeconds,
         hideSeconds = 0.0,
         staleAfterSeconds = config.staleAfterSeconds,
         facingEnterDot = config.facingEnterDot,
         facingExitDot = config.facingHoldDot,
+        facingSurface = config.facingSurface,
     ))
     private var lockedRight: Vec3? = null
     private var previousPalm: Vec3? = null
@@ -53,8 +53,7 @@ class HandSwipeRotation(private val config: HandSwipeRotationConfig = HandSwipeR
 
     fun update(hand: HandLandmarks?, cameraPosition: Vec3, cameraRight: Vec3, deltaSeconds: Double): HandSwipeRotationState {
         if (hand == null || !cameraPosition.finite() || !cameraRight.finite()) return stop()
-        val reflectedCamera = hand.palm + (hand.palm - cameraPosition)
-        val gesture = pose.update(hand, reflectedCamera, deltaSeconds)
+        val gesture = pose.update(hand, cameraPosition, deltaSeconds)
         if (!gesture.visible || !gesture.validTracking || !gesture.isOpen || !gesture.isFacingHead) {
             clearAnchor()
             return HandSwipeRotationState()

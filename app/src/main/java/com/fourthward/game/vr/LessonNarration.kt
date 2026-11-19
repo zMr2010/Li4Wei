@@ -2,8 +2,6 @@ package com.fourthward.game.vr
 
 import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
@@ -12,11 +10,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /** Offline, one-clip-at-a-time lesson speech. All player operations run on the main looper. */
-class LessonNarration(context: Context) : AutoCloseable {
+class LessonNarration(context: Context, private val onSpeaking: (Boolean) -> Unit) : AutoCloseable {
     enum class Status { IDLE, PREPARING, PLAYING, PAUSED, COMPLETED, UNAVAILABLE, CLOSED }
 
     private val appContext = context.applicationContext
-    private val audioManager = appContext.getSystemService(AudioManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0L)
     private val closed = AtomicBoolean(false)
@@ -33,8 +30,7 @@ class LessonNarration(context: Context) : AutoCloseable {
     // Main-looper-owned fields. A generation check rejects callbacks from superseded clips.
     private var player: MediaPlayer? = null
     private var prepared = false
-    private var audioFocusRequest: AudioFocusRequest? = null
-    private var hasAudioFocus = false
+    private var audioAllowed = false
 
     fun play(stepId: String) {
         if (closed.get()) return
@@ -89,11 +85,15 @@ class LessonNarration(context: Context) : AutoCloseable {
         activeRequested = active
         onMain {
             if (closed.get()) return@onMain
-            if (!activeRequested) {
-                pausePlayer()
-                abandonAudioFocus()
-            } else if (prepared) updatePlayback(generation.get())
+            if (prepared) updatePlayback(generation.get())
         }
+    }
+
+    /** The soundtrack owns system audio focus and leaves the startup call clear of tutorial speech. */
+    fun setAudioAllowed(allowed: Boolean) = onMain {
+        if (closed.get() || audioAllowed == allowed) return@onMain
+        audioAllowed = allowed
+        if (prepared) updatePlayback(generation.get())
     }
 
     /** Entering a playable level or changing to another screen releases the pending sentence. */
@@ -131,12 +131,8 @@ class LessonNarration(context: Context) : AutoCloseable {
     private fun updatePlayback(ticket: Long) {
         val current = player ?: return
         if (!owns(current, ticket) || !prepared) return
-        if (!activeRequested) {
+        if (!activeRequested || !audioAllowed) {
             pausePlayer()
-            return
-        }
-        if (!requestAudioFocus(ticket)) {
-            publish(Status.PAUSED)
             return
         }
         try {
@@ -147,37 +143,6 @@ class LessonNarration(context: Context) : AutoCloseable {
             releasePlayer()
             unavailable(error.message ?: "Cannot start narration")
         }
-    }
-
-    private fun requestAudioFocus(ticket: Long): Boolean {
-        if (hasAudioFocus) return true
-        val manager = audioManager ?: return true
-        if (audioFocusRequest == null) {
-            audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener({ change ->
-                    if (closed.get() || generation.get() != ticket || player == null) return@setOnAudioFocusChangeListener
-                    when (change) {
-                        AudioManager.AUDIOFOCUS_GAIN -> {
-                            hasAudioFocus = true
-                            if (activeRequested && prepared) updatePlayback(ticket)
-                        }
-                        AudioManager.AUDIOFOCUS_LOSS,
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                            hasAudioFocus = false
-                            pausePlayer()
-                        }
-                    }
-                }, handler)
-                .build()
-        }
-        hasAudioFocus = manager.requestAudioFocus(audioFocusRequest!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        if (!hasAudioFocus) {
-            errorMessage = "Audio focus unavailable"
-            Log.i(TAG, "audio focus unavailable step=$currentStepId; captions remain available")
-        }
-        return hasAudioFocus
     }
 
     private fun pausePlayer() {
@@ -192,12 +157,6 @@ class LessonNarration(context: Context) : AutoCloseable {
         }
     }
 
-    private fun abandonAudioFocus() {
-        audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
-        audioFocusRequest = null
-        hasAudioFocus = false
-    }
-
     private fun releasePlayer() {
         val previous = player
         player = null
@@ -206,7 +165,6 @@ class LessonNarration(context: Context) : AutoCloseable {
         previous?.setOnCompletionListener(null)
         previous?.setOnErrorListener(null)
         previous?.release()
-        abandonAudioFocus()
     }
 
     private fun unavailable(reason: String) {
@@ -217,6 +175,7 @@ class LessonNarration(context: Context) : AutoCloseable {
 
     private fun publish(next: Status) {
         if (status != next) Log.i(TAG, "state=$next step=$currentStepId")
+        if ((status == Status.PLAYING) != (next == Status.PLAYING)) onSpeaking(next == Status.PLAYING)
         status = next
     }
 
