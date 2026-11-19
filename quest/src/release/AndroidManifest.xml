@@ -7,6 +7,7 @@
 
     <application>
         <meta-data android:name="pvr.app.type" android:value="vr" />
+        <meta-data android:name="controller" android:value="1" />
         <meta-data android:name="handtracking" android:value="1" />
     </application>
 </manifest>
