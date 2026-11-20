@@ -44,7 +44,6 @@ internal class VrHandControls {
     )
 
     private enum class Side { LEFT, RIGHT }
-    private enum class PanelState { HIDDEN, PINNED, DISMISSED_BY_GRIP }
 
     private val leftGesture = HandContactGesture()
     private val rightGesture = HandContactGesture()
@@ -54,14 +53,14 @@ internal class VrHandControls {
     private val rightPointer = PanelPointer()
     private val swipe = HandSwipeRotation()
     private val pull = GrabPull()
-    // A hand placement belongs to this tracking session, across all level coordinate systems.
-    var preferredPanel: Panel? = null
-        private set
-    private var panelState = PanelState.HIDDEN
-    private val pinnedPanel get() = preferredPanel.takeIf { panelState == PanelState.PINNED }
+    private var lastPlacement: Panel? = null
+    private var handPanelVisible = false
+    private val pinnedPanel get() = lastPlacement.takeIf { handPanelVisible }
     private var pointerOwner: Side? = null
     private var swiping = false
     private var pullingHand: Side? = null
+
+    fun lessonPanel(defaultDock: Panel): Panel = lastPlacement ?: defaultDock
 
     fun resetPanelInput() {
         leftPointer.interruptPage()
@@ -79,8 +78,8 @@ internal class VrHandControls {
     fun resetInput() {
         leftGesture.reset()
         rightGesture.reset()
-        leftOpener.resetDwell()
-        rightOpener.resetDwell()
+        leftOpener.reset()
+        rightOpener.reset()
         leftPointer.reset()
         rightPointer.reset()
         pointerOwner = null
@@ -90,9 +89,7 @@ internal class VrHandControls {
     fun reset() {
         resetPanelInput()
         resetInput()
-        panelState = PanelState.HIDDEN
-        leftOpener.reset()
-        rightOpener.reset()
+        handPanelVisible = false
     }
 
     fun update(
@@ -107,46 +104,39 @@ internal class VrHandControls {
         allowMotion: Boolean,
         panelHoldDeltaSeconds: Double,
         allowMapDrag: Boolean = false,
-        allowPanelGestures: Boolean = true,
+        allowPanelDismiss: Boolean = true,
     ): Frame {
         val leftContact = leftGesture.update(left, dt)
         val rightContact = rightGesture.update(right, dt)
         val existingPanel = pinnedPanel ?: lessonPanel
-        if (allowPanelGestures && existingPanel != null) {
+        if (allowPanelDismiss && existingPanel != null) {
             val leftCloses = gripsPanel(leftContact, existingPanel, layout)
             val rightCloses = gripsPanel(rightContact, existingPanel, layout)
             if (leftCloses || rightCloses) {
-                panelState = PanelState.DISMISSED_BY_GRIP
-                leftOpener.suppress(leftContact?.hand, head, leftCloses)
-                rightOpener.suppress(rightContact?.hand, head, rightCloses)
+                handPanelVisible = false
+                leftOpener.suppressHeldPose(leftContact?.hand, head)
+                rightOpener.suppressHeldPose(rightContact?.hand, head)
                 resetMotion()
                 resetPanelInput()
                 return Frame(closed = true)
             }
         }
 
-        val opened = if (allowPanelGestures && pinnedPanel == null) {
-            val leftPanel = leftOpener.update(leftContact?.hand, head, panelHoldDeltaSeconds)
-            val rightPanel = rightOpener.update(rightContact?.hand, head, panelHoldDeltaSeconds)
-            val placement = rightPanel ?: leftPanel
-            if (placement != null) {
-                // An automatic close between levels recalls the prior pose. Closing by
-                // hand lets the player choose a new spot with the next palm gesture.
-                if (preferredPanel == null || panelState == PanelState.DISMISSED_BY_GRIP) {
-                    preferredPanel = placement
-                }
-                panelState = PanelState.PINNED
-            }
-            placement != null
-        } else false
-        val panel = if (allowPanelGestures) pinnedPanel ?: lessonPanel else lessonPanel
+        val leftPlacement = leftOpener.update(leftContact?.hand, head, panelHoldDeltaSeconds)
+        val rightPlacement = rightOpener.update(rightContact?.hand, head, panelHoldDeltaSeconds)
+        val placement = rightPlacement ?: leftPlacement
+        if (placement != null) {
+            lastPlacement = placement
+            handPanelVisible = true
+        }
+        val panel = pinnedPanel ?: lessonPanel
         if (panel != null) {
             resetMotion()
             // A newly revealed map row can have more cards. Its entrance gate applies to new presses.
             val continuingDrag = allowMapDrag && (leftPointer.dragging || rightPointer.dragging)
-            if (opened || (!interactionReady && !continuingDrag)) {
+            if (placement != null || (!interactionReady && !continuingDrag)) {
                 resetPanelInput()
-                return Frame(panel = panel, opened = opened)
+                return Frame(panel = panel, opened = placement != null)
             }
             // A captured pinch owns its release, even if the other hand pokes a button meanwhile.
             val wasLeft = leftPointer.captured
@@ -229,37 +219,33 @@ private class PanelOpener {
     private val gesture = HandPanelGesture(HandPanelGestureConfig(
         showSeconds = 3.0, facingSurface = HandSurface.PALM, allowFacingUp = true,
     ))
-    private var dismissedAt: Vec3? = null
-    private var holdingPose = false
-
-    fun resetDwell() {
-        gesture.reset()
-        holdingPose = false
-    }
+    private enum class Hold { IDLE, TIMING, PLACED }
+    private var hold = Hold.IDLE
 
     fun reset() {
-        resetDwell()
-        dismissedAt = null
+        gesture.reset()
+        hold = Hold.IDLE
     }
 
-    fun suppress(hand: HandLandmarks?, head: VrTrackingMath.Pose, closed: Boolean) {
-        resetDwell()
-        val heldOpen = gesture.update(hand, head.position, 0.0).isPanelPose
-        dismissedAt = hand?.palm?.takeIf { closed || heldOpen }
+    fun suppressHeldPose(hand: HandLandmarks?, head: VrTrackingMath.Pose) {
+        reset()
+        // A second hand already open when the first closes the panel must release before recalling it.
+        if (gesture.update(hand, head.position, 0.0).isPanelPose) hold = Hold.PLACED
     }
 
     fun update(hand: HandLandmarks?, head: VrTrackingMath.Pose, elapsedSeconds: Double): VrHandControls.Panel? {
-        // Unclenching at the same spot after a dismissal must leave the panel closed.
-        val origin = dismissedAt
-        if (origin != null && hand != null && (hand.palm - origin).lengthSquared() > .10 * .10) dismissedAt = null
-        val waiting = dismissedAt != null
-        // Begin measuring at the first sample of a valid pose.
-        val open = gesture.update(hand, head.position, if (holdingPose && !waiting) elapsedSeconds else 0.0)
-        holdingPose = !waiting && open.isPanelPose
-        if (open.isOpen && !open.isPanelPose) dismissedAt = null
-        if (waiting || !open.visible || !open.isPanelPose || hand == null) return null
+        val open = gesture.update(hand, head.position, if (hold == Hold.IDLE) 0.0 else elapsedSeconds)
+        if (!open.isPanelPose || hand == null) {
+            reset()
+            return null
+        }
+        if (hold == Hold.PLACED) return null
+        hold = Hold.TIMING
+        if (!open.visible) return null
         val normal = open.palmNormal ?: return null
-        return VrTrackingMath.panelPose(hand.palm + normal * .04, head)?.let { VrHandControls.Panel(it) }
+        val pose = VrTrackingMath.panelPose(hand.palm + normal * .04, head) ?: return null
+        hold = Hold.PLACED
+        return VrHandControls.Panel(pose)
     }
 }
 

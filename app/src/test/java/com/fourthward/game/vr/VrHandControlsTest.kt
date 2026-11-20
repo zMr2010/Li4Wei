@@ -121,39 +121,89 @@ class VrHandControlsTest {
         }
     }
 
-    @Test fun sceneResetHidesThePanelAndTheNextSummonRestoresItsStagePose() {
+    @Test fun newLessonUsesLastPlacementUntilASummonSetsANewPositionAndOrientation() {
         val controls = VrHandControls()
+        val defaultDock = VrHandControls.Panel(checkNotNull(VrTrackingMath.startPanelPose(head)), scale = 1.6)
+        assertEquals(defaultDock, controls.lessonPanel(defaultDock))
         val placed = openPanel(controls)
         controls.reset()
         val movedHead = head.copy(position = head.position + Vec3(.30, -.03, .06))
         val movedHand = openHand(reach + Vec3(.19, .04, .05), left = false)
         assertNull(update(controls, view = movedHead).panel)
-        assertEquals(placed, controls.preferredPanel)
-        val restored = openAfterThreeSeconds { update(controls, view = movedHead, right = movedHand) }
-        assertEquals(placed, restored.panel)
-
-        val closingHand = openHand(placed.pose.position, left = true)
-        update(controls, view = movedHead, left = closingHand)
-        assertTrue(update(controls, view = movedHead, left = fist(closingHand)).closed)
-        val relocated = openAfterThreeSeconds { update(controls, view = movedHead, right = movedHand) }
+        fun sample(palm: HandLandmarks?) = controls.update(.05, movedHead, null, palm,
+            controls.lessonPanel(defaultDock), PalmPanelLayout.lessonMenu, emptySet(),
+            interactionReady = true, allowMotion = false, panelHoldDeltaSeconds = .05)
+        assertEquals(placed, sample(null).panel)
+        repeat(60) { assertEquals(placed, sample(movedHand).panel) }
+        val recalled = sample(movedHand)
+        assertTrue(recalled.opened)
         val expected = VrTrackingMath.panelPose(movedHand.palm + checkNotNull(movedHand.palmNormal) * .04, movedHead)
-        assertEquals(expected, relocated.panel?.pose)
-        assertNotEquals(placed, relocated.panel)
-        assertEquals(relocated.panel, controls.preferredPanel)
+        assertEquals(expected, recalled.panel?.pose)
+        assertNotEquals(placed, recalled.panel)
+        controls.reset()
+        assertEquals(recalled.panel, sample(null).panel)
     }
 
-    @Test fun displayingADefaultDockDoesNotSaveItAsAHandPlacement() {
-        val controls = VrHandControls()
-        val dock = VrHandControls.Panel(checkNotNull(VrTrackingMath.startPanelPose(head)), scale = 1.6)
-        val frame = controls.update(.05, head, null, null, dock, layout, emptySet(),
-            interactionReady = true, allowMotion = false, panelHoldDeltaSeconds = .05)
-        assertEquals(dock, frame.panel)
-        assertNull(controls.preferredPanel)
+    @Test fun aNewPalmHoldRecallsAnAlreadyOpenPanelAndOneContinuousHoldPlacesItOnlyOnce() {
+        for (recallWithLeft in listOf(false, true)) {
+            val controls = VrHandControls()
+            val hand = openHand(reach, left = false)
+            val original = openAfterThreeSeconds { update(controls, right = hand) }.panel
+            repeat(100) { i ->
+                val moved = shift(hand, Vec3(.002 * i, 0.0, 0.0))
+                val held = update(controls, right = moved)
+                assertFalse(held.opened)
+                assertEquals(original, held.panel)
+            }
+            assertEquals(original, update(controls).panel)
+            // The old panel is behind the wearer. The summon needs no contact with it.
+            val turned = head.copy(right = head.right * -1.0, normal = head.normal * -1.0)
+            val palm = openHand(Vec3(.1, 1.4, .5), recallWithLeft, forwardPalm = true)
+            fun sample(hand: HandLandmarks) = update(controls, view = turned,
+                left = hand.takeIf { recallWithLeft }, right = hand.takeUnless { recallWithLeft })
+            repeat(60) { assertEquals(original, sample(palm).panel) }
+            val finalPalm = shift(palm, Vec3(.02, 0.0, 0.0))
+            val recalled = sample(finalPalm)
+            assertTrue(recalled.opened)
+            assertNull(recalled.action)
+            val expected = VrTrackingMath.panelPose(finalPalm.palm + checkNotNull(finalPalm.palmNormal) * .04, turned)
+            assertEquals(expected, recalled.panel?.pose)
+            assertEquals(recalled.panel, update(controls, view = turned).panel)
+        }
+    }
 
-        controls.reset()
-        val opened = openPanel(controls)
-        assertNotEquals(dock.pose, opened.pose)
-        assertEquals(opened, controls.preferredPanel)
+    @Test fun recallingAMapOnPinchReleaseDoesNotSelectTheOldCard() {
+        val controls = VrHandControls()
+        val dock = openPanel(controls)
+        val map = LevelDependencyGraph(TutorialLevels.all()).window(0).layout
+        val aim = pointingHand(dock, .08, action = PalmAction.LEVEL_1, layout = map)
+        val grippingCard = pinch(aim)
+        val summon = openHand(reach + Vec3(.27, 0.0, 0.0), left = false)
+        fun sample(pointer: HandLandmarks) = controls.update(.05, head, pointer, summon, null, map, emptySet(),
+            interactionReady = true, allowMotion = false, panelHoldDeltaSeconds = .05, allowMapDrag = true)
+        assertEquals(PalmAction.LEVEL_1, sample(aim).hovered)
+        repeat(59) { assertEquals(PalmAction.LEVEL_1, sample(grippingCard).pressed) }
+        val recalled = sample(aim)
+        assertTrue(recalled.opened)
+        assertNotEquals(dock, recalled.panel)
+        assertNull(recalled.action)
+        assertEquals(0, recalled.mapDragRows)
+        assertNull(sample(aim).action)
+    }
+
+    @Test fun aSummonCanRelocateAVisibleDockThatCannotBeDismissed() {
+        val controls = VrHandControls()
+        val dock = VrHandControls.Panel(checkNotNull(VrTrackingMath.startPanelPose(head)))
+        val palm = openHand(reach, left = false)
+        fun sample(hand: HandLandmarks) = controls.update(.05, head, null, hand, dock, layout, emptySet(),
+            interactionReady = true, allowMotion = false, panelHoldDeltaSeconds = .05, allowPanelDismiss = false)
+        repeat(60) { assertEquals(dock, sample(palm).panel) }
+        val recalled = sample(palm)
+        assertTrue(recalled.opened)
+        assertNotEquals(dock.pose, recalled.panel?.pose)
+        val close = sample(fist(palm))
+        assertFalse(close.closed)
+        assertEquals(recalled.panel, close.panel)
     }
 
     @Test fun interruptingThePoseRestartsTheThreeSecondHold() {
@@ -166,7 +216,7 @@ class VrHandControlsTest {
         }
     }
 
-    @Test fun eitherHandCanCloseThePanelAndUnclenchingDoesNotReopenIt() {
+    @Test fun closingSuppressesTheOtherHeldPalmAndRequiresAFreshFullHoldToReopenAtTheSameSpot() {
         val orientations = listOf<(Vec3) -> Vec3>(
             { it }, { Vec3(it.z, it.y, -it.x) }, { Vec3(-it.x, it.y, -it.z) },
             { Vec3(it.x, it.z, -it.y) }, { Vec3(it.x, -it.z, it.y) },
@@ -190,8 +240,7 @@ class VrHandControlsTest {
             val closed = use(oriented(fist(palm)))
             assertTrue(closed.closed)
             assertNull(closed.panel)
-            repeat(61) { assertNull(use(palm).panel) }
-            assertNull(use(openHand(at, leftCloses, forwardPalm = true)).panel)
+            repeat(65) { assertNull(use(oriented(fist(palm))).panel) }
             openAfterThreeSeconds { use(palm) }
         }
     }
@@ -349,7 +398,7 @@ class VrHandControlsTest {
         val rowHeight = window.layout.heightMeters * LevelMapWindow.ROW_SPACING
         fun sample(hand: HandLandmarks?, ready: Boolean = true) = controls.update(.025, head, hand, null, panel, window.layout, emptySet(),
             interactionReady = ready, allowMotion = false, panelHoldDeltaSeconds = .025, allowMapDrag = true,
-            allowPanelGestures = false).also { window = graph.window(window.firstRow + it.mapDragRows) }
+            allowPanelDismiss = false).also { window = graph.window(window.firstRow + it.mapDragRows) }
         fun at(rows: Double, pinching: Boolean = true) =
             shift(if (pinching) pinch(open) else open, panel.pose.up * (-rows * rowHeight))
         assertEquals(target, sample(open).hovered)
@@ -378,7 +427,7 @@ class VrHandControlsTest {
         val map = LevelDependencyGraph(TutorialLevels.all()).window(0).layout
         val open = pointingHand(panel, .08, action = PalmAction.LEVEL_1, layout = map)
         fun sample(hand: HandLandmarks) = controls.update(.025, head, hand, null, panel, map, emptySet(),
-            true, false, .025, allowMapDrag = true, allowPanelGestures = false)
+            true, false, .025, allowMapDrag = true, allowPanelDismiss = false)
         sample(open)
         sample(pinch(open))
         var rows = 0
@@ -399,7 +448,7 @@ class VrHandControlsTest {
         for (open in listOf(aimed, empty)) {
             val controls = VrHandControls()
             fun sample(hand: HandLandmarks?) = controls.update(.025, head, null, hand, panel, map, setOf(locked),
-                true, false, .025, allowMapDrag = true, allowPanelGestures = false)
+                true, false, .025, allowMapDrag = true, allowPanelDismiss = false)
             assertNull(sample(open).hovered)
             assertNull(sample(pinch(open)).pressed)
             val dragged = shift(pinch(open), panel.pose.up * -.075)
@@ -420,7 +469,7 @@ class VrHandControlsTest {
         val away = shift(hand, panel.pose.right * .10)
         var elapsed = .025
         fun sample(input: HandLandmarks?) = controls.update(.05, head, input, null, panel, spec, emptySet(),
-            true, false, elapsed, allowPanelGestures = false)
+            true, false, elapsed, allowPanelDismiss = false)
         repeat(80) { assertNull(sample(hand).action) }
         val fired = sample(hand)
         assertEquals(target, fired.action)
@@ -448,7 +497,7 @@ class VrHandControlsTest {
         val left = pointingHand(panel, .18)
         val right = pointingHand(panel, .18, left = false, action = PalmAction.TOGGLE_REFERENCE)
         fun sample(l: HandLandmarks?, r: HandLandmarks?, disabled: Set<PalmAction> = emptySet()) =
-            controls.update(.05, head, l, r, panel, layout, disabled, true, false, .05, allowPanelGestures = false)
+            controls.update(.05, head, l, r, panel, layout, disabled, true, false, .05, allowPanelDismiss = false)
         repeat(35) { assertNull(sample(left, null).action) }
         sample(null, null)
         assertEquals(0.0, sample(left, null).dwellProgress, 0.0)
@@ -467,7 +516,7 @@ class VrHandControlsTest {
         val hand = shift(center, panel.pose.right * (button.width * layout.widthMeters * .5 - .0005))
         val noise = kotlin.random.Random(775)
         fun sample(input: HandLandmarks) = controls.update(.02, head, input, null, panel, layout, emptySet(),
-            true, false, .02, allowPanelGestures = false)
+            true, false, .02, allowPanelDismiss = false)
         assertEquals(target, sample(hand).hovered)
         val clicks = (1..205).mapNotNull {
             val translation = panel.pose.right * noise.nextDouble(-.0015, .0015)
@@ -492,7 +541,7 @@ class VrHandControlsTest {
             val aim = transform(straight, { straight.index.tip + roll(it - straight.index.tip) }, ::roll)
             val gap = aim.thumb.tip - aim.index.tip
             fun sample(input: HandLandmarks) = controls.update(.0125, head, input.takeIf { side }, input.takeUnless { side },
-                panel, layout, emptySet(), true, false, .0125, allowPanelGestures = false)
+                panel, layout, emptySet(), true, false, .0125, allowPanelDismiss = false)
             assertEquals(target, sample(aim).hovered)
             val noise = kotlin.random.Random(99)
             var captured = false
@@ -520,7 +569,7 @@ class VrHandControlsTest {
         val map = LevelDependencyGraph(TutorialLevels.all()).window(0).layout
         val open = pointingHand(panel, .08, action = PalmAction.LEVEL_1, layout = map)
         fun sample(hand: HandLandmarks) = controls.update(.02, head, hand, null, panel, map, emptySet(),
-            true, false, .02, allowMapDrag = true, allowPanelGestures = false)
+            true, false, .02, allowMapDrag = true, allowPanelDismiss = false)
         repeat(90) { assertNull(sample(open).action) }
         assertEquals(PalmAction.LEVEL_1, sample(pinch(open)).pressed)
         var rows = 0
@@ -588,7 +637,9 @@ class VrHandControlsTest {
         val x = ((button.left + button.right) / 2 - .5) * layout.widthMeters * panel.scale
         val y = (.5 - (button.top + button.bottom) / 2) * layout.heightMeters * panel.scale
         val tip = pose.position + pose.right * x + pose.up * y + pose.normal * depth
-        val hand = openHand(Vec3.ZERO, left)
+        val open = openHand(Vec3.ZERO, left)
+        val curled = fist(open)
+        val hand = open.copy(middle = curled.middle, ring = curled.ring, little = curled.little)
         fun orient(v: Vec3) = pose.right * v.x - pose.normal * v.y + pose.up * v.z
         return transform(hand, { tip + orient(it - hand.index.tip) }, ::orient)
     }

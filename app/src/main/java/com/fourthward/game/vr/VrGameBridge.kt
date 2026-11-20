@@ -564,12 +564,11 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
             debugAnchor = null
             null
         }
-        val defaultDock = debugDock ?: activeDock(head)
-        val dock = if (welcomeVisible || defaultDock == null) defaultDock else handControls.preferredPanel ?: defaultDock
+        val dock = debugDock ?: activeDock(head)
         val frame = handControls.update(dt, head, left, right, dock, activePanelLayout(), disabledPanelActions(),
             interactionReady = ui.interactionReady(navigationRevision),
             allowMotion = lesson == null && !levelListVisible,
-            allowPanelGestures = !welcomeVisible && !debugVisible,
+            allowPanelDismiss = !welcomeVisible,
             allowMapDrag = levelListVisible,
             panelHoldDeltaSeconds = elapsedSeconds)
         // A keyboard shortcut may be used while wearing a headset. Switch the hints back
@@ -591,6 +590,7 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
         pressedAction = frame.pressed
         if (frame.opened) Log.i(TAG, "hand-panel=opened at=${panelPose?.position}")
         if (frame.closed) {
+            debugVisible = false
             lessonDockDismissed = lesson != null
             if (levelListVisible) backFromList()
             Log.i(TAG, "hand-panel=closed")
@@ -609,7 +609,7 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     }
 
     private fun activeDock(head: VrTrackingMath.Pose): VrHandControls.Panel? {
-        if (!welcomeVisible) return lessonDock()
+        if (!welcomeVisible) return lessonDock()?.let(handControls::lessonPanel)
         welcomeDock?.let { return it }
         val pose = VrTrackingMath.startPanelPose(head) ?: return null
         return VrHandControls.Panel(pose).also {
