@@ -86,9 +86,17 @@ internal class VrHandControls {
         resetMotion()
     }
 
-    fun reset() {
+    fun resetForPage() {
+        leftOpener.cancelPendingHold()
+        rightOpener.cancelPendingHold()
         resetPanelInput()
-        resetInput()
+    }
+
+    fun resetForScene() {
+        resetForPage()
+        leftGesture.reset()
+        rightGesture.reset()
+        resetMotion()
         handPanelVisible = false
     }
 
@@ -225,6 +233,10 @@ private class PanelOpener {
     fun reset() {
         gesture.reset()
         hold = Hold.IDLE
+    }
+
+    fun cancelPendingHold() {
+        if (hold == Hold.TIMING) reset()
     }
 
     fun suppressHeldPose(hand: HandLandmarks?, head: VrTrackingMath.Pose) {

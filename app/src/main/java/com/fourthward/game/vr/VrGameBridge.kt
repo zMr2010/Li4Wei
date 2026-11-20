@@ -70,7 +70,7 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     private var lessonDockDismissed = false
     private var narratedRevision: Pair<Int, Long>? = null
     private var wasLessonAnimating = false
-    private var lessonControlFocused = false
+    private var panelControlFocused = false
     private var lessonFeedbackAction: PalmAction? = null
     private val soundtrack: GameSoundtrack = GameSoundtrack(context, skipStartup) { narration.setAudioAllowed(it) }
     private val narration: LessonNarration = LessonNarration(context, soundtrack::setSpeaking)
@@ -217,10 +217,14 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
             // Do not apply the old page's remaining queued clicks to its replacement.
             if (navigationRevision != commandPage || game.deathCount != beforeDeaths) break
         }
-        val hand = if (focused && game.deathCount == beforeDeaths) updateHands(handDt, elapsedSeconds, tracked,
-            VrTrackingMath.hand(leftHand, true), VrTrackingMath.hand(rightHand, false)) else {
-            resetHandTracking()
-            VrHandControls.Frame()
+        val hand = when {
+            !focused || tracked == null -> {
+                resetHandTracking()
+                VrHandControls.Frame()
+            }
+            game.deathCount != beforeDeaths -> VrHandControls.Frame()
+            else -> updateHands(handDt, elapsedSeconds, tracked, VrTrackingMath.hand(leftHand, true),
+                VrTrackingMath.hand(rightHand, false))
         }
         fun canSimulate() = focused && tracked != null && navigationRevision == commandPage &&
             game.deathCount == beforeDeaths && lesson == null && !startedInLesson && !levelListVisible && !startedInLevelList
@@ -279,19 +283,20 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
         val selected = layout.buttons[selectedControl.coerceIn(layout.buttons.indices)].action
         val activeLesson = lesson
         val disabled = disabledPanelActions()
-        val keyboardFocus = debugVisible || ((welcomeVisible || activeLesson != null) && (keyboardMode.get() || lessonControlFocused))
+        val usingButtons = keyboardMode.get() || panelControlFocused
+        val keyboardFocus = usingButtons && (debugVisible || welcomeVisible || activeLesson != null)
         val panel = VrPanelState(referenceVisible,
             theme = theme,
             hoveredAction = hoveredAction ?: selected.takeIf { pointer == null && keyboardFocus },
             pressedAction = pressedAction ?: if (clickFeedback > 0.0) {
-                if (activeLesson != null) lessonFeedbackAction else if (debugVisible) selected else null
+                if (activeLesson != null) lessonFeedbackAction else if (debugVisible && usingButtons) selected else null
             } else null,
             pointer = pointer,
             dwellProgress = dwellProgress,
             contextLabel = contextLabel(),
             referenceLabel = if (game.level.expedition != null) "提示" else "参考平面",
             referenceSelected = game.level.expedition == null && referenceVisible,
-            debugMode = debugVisible || (welcomeVisible && keyboardMode.get()),
+            debugMode = usingButtons && (debugVisible || welcomeVisible),
             labels = if (levelListVisible) null else activeLesson?.let { listOf("上一步", "重播本步", if (it.isAnimating) "演示中" else if (it.isLastStep) "开始探索" else "下一步") },
             disabled = disabled,
             header = if (levelListVisible) null else activeLesson?.let {
@@ -396,7 +401,10 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     private fun showLevelList(visible: Boolean, keyboard: Boolean = false) {
         if (welcomeVisible || levelListVisible == visible) return
         mapPage = if (visible) MapPage.IN_GAME else MapPage.HIDDEN
-        if (keyboard) debugVisible = true
+        if (keyboard) {
+            debugVisible = true
+            panelControlFocused = true
+        }
         if (visible) mapWindow = levelGraph.windowForLevel(game.levelIndex)
         selectedControl = if (visible) mapWindow.nodes.indexOfFirst { it.index == game.levelIndex }.coerceAtLeast(0)
             else if (lesson != null) 2 else 0
@@ -443,8 +451,8 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     }
 
     private fun selectControl(direction: Int) {
-        if (lesson != null || welcomeVisible) lessonControlFocused = true
-        else if (!debugVisible) { debugVisible = true; resetHands() }
+        panelControlFocused = true
+        if (lesson == null && !welcomeVisible && !debugVisible) { debugVisible = true; resetHands() }
         val buttons = activePanelLayout().buttons
         val disabled = disabledPanelActions()
         repeat(buttons.size) {
@@ -476,13 +484,14 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
             InputCommand.TOGGLE_DEBUG_PANEL -> {
                 if (levelListVisible) { showLevelList(false); debugVisible = false }
                 else debugVisible = !debugVisible
+                panelControlFocused = debugVisible
                 resetHands(); logState("debug-panel=$debugVisible"); return
             }
             InputCommand.SELECT_NEXT_CONTROL -> { selectControl(1); return }
             InputCommand.SELECT_PREVIOUS_CONTROL -> { selectControl(-1); return }
             InputCommand.ACTIVATE_CONTROL -> {
                 if (welcomeVisible || debugVisible || panelPose != null) {
-                    lessonControlFocused = true
+                    panelControlFocused = true
                     clickFeedback = 0.18
                     execute(activePanelLayout().buttons[selectedControl].action)
                 }
@@ -551,12 +560,8 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     }
 
     private fun updateHands(
-        dt: Double, elapsedSeconds: Double, head: VrTrackingMath.Pose?, left: HandLandmarks?, right: HandLandmarks?,
+        dt: Double, elapsedSeconds: Double, head: VrTrackingMath.Pose, left: HandLandmarks?, right: HandLandmarks?,
     ): VrHandControls.Frame {
-        if (head == null) {
-            resetHandTracking()
-            return VrHandControls.Frame()
-        }
         val debugDock = if (debugVisible && !welcomeVisible) {
             val anchor = debugAnchor ?: (head.position - head.normal * .65 - head.up * .08).also { debugAnchor = it }
             VrTrackingMath.panelPose(anchor, head)?.let { VrHandControls.Panel(it) }
@@ -576,7 +581,7 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
         if (frame.action != null || frame.opened || frame.closed || frame.mapDragRows != 0 ||
             frame.pulling || frame.rotation.active) {
             keyboardMode.set(false)
-            lessonControlFocused = false
+            panelControlFocused = false
         }
         if (rotationActive != frame.rotation.active) Log.i(TAG, "right-hand-swipe=${frame.rotation.active}")
         if (pullActive != frame.pulling) Log.i(TAG, "hand-pull=${frame.pulling}")
@@ -639,12 +644,16 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     }
 
     private fun resetPanelInput() {
-        handControls.resetPanelInput()
+        handControls.resetForPage()
         clearPanelFeedback()
     }
 
     private fun resetHandTracking() {
         handControls.resetInput()
+        clearHandFrame()
+    }
+
+    private fun clearHandFrame() {
         clearPanelFeedback()
         rotationActive = false
         pullActive = false
@@ -653,8 +662,8 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
     }
 
     private fun resetHands() {
-        handControls.reset()
-        resetHandTracking()
+        handControls.resetForScene()
+        clearHandFrame()
         lessonDockDismissed = false
     }
 
@@ -668,7 +677,7 @@ class VrGameBridge(context: Context, skipStartup: Boolean = false) {
         lessonAnchor = null
         narratedRevision = null
         wasLessonAnimating = false
-        lessonControlFocused = false
+        panelControlFocused = false
         lessonFeedbackAction = null
         selectedControl = if (lesson != null) 2 else 0
         debugVisible = false

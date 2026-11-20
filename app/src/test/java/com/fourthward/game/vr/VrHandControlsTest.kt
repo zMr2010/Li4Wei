@@ -126,7 +126,7 @@ class VrHandControlsTest {
         val defaultDock = VrHandControls.Panel(checkNotNull(VrTrackingMath.startPanelPose(head)), scale = 1.6)
         assertEquals(defaultDock, controls.lessonPanel(defaultDock))
         val placed = openPanel(controls)
-        controls.reset()
+        controls.resetForScene()
         val movedHead = head.copy(position = head.position + Vec3(.30, -.03, .06))
         val movedHand = openHand(reach + Vec3(.19, .04, .05), left = false)
         assertNull(update(controls, view = movedHead).panel)
@@ -140,8 +140,38 @@ class VrHandControlsTest {
         val expected = VrTrackingMath.panelPose(movedHand.palm + checkNotNull(movedHand.palmNormal) * .04, movedHead)
         assertEquals(expected, recalled.panel?.pose)
         assertNotEquals(placed, recalled.panel)
-        controls.reset()
+        controls.resetForScene()
         assertEquals(recalled.panel, sample(null).panel)
+    }
+
+    @Test fun heldSummonSurvivesPageAndMenuResetsUntilReleaseButTrackingLossRearmsIt() {
+        val controls = VrHandControls()
+        val palm = openHand(reach, left = true)
+        val original = openAfterThreeSeconds { update(controls, left = palm) }.panel
+        controls.resetForPage()
+        repeat(80) {
+            val frame = update(controls, left = palm)
+            assertFalse(frame.opened)
+            assertEquals(original, frame.panel)
+        }
+        controls.resetForScene()
+        repeat(80) { assertNull(update(controls, left = palm).panel) }
+        val away = openHand(reach, left = true, forwardPalm = true)
+        assertNull(update(controls, left = away).panel)
+        openAfterThreeSeconds { update(controls, left = palm) }
+        controls.resetForScene()
+        controls.resetInput()
+        openAfterThreeSeconds { update(controls, left = palm) }
+    }
+
+    @Test fun switchingPagesOrScenesRestartsAPartialHoldAtZero() {
+        for (changeScene in listOf(false, true)) {
+            val controls = VrHandControls()
+            val palm = openHand(reach, left = false)
+            repeat(40) { assertNull(update(controls, right = palm).panel) }
+            if (changeScene) controls.resetForScene() else controls.resetForPage()
+            openAfterThreeSeconds { update(controls, right = palm) }
+        }
     }
 
     @Test fun aNewPalmHoldRecallsAnAlreadyOpenPanelAndOneContinuousHoldPlacesItOnlyOnce() {
@@ -348,7 +378,7 @@ class VrHandControlsTest {
         update(controls)
         assertNull(update(controls, left = pinch(left)).action)
 
-        controls.reset()
+        controls.resetForScene()
         val reachHand = openHand(reach, left = true)
         update(controls, left = reachHand, allowMotion = false)
         assertFalse(update(controls, left = fist(reachHand), allowMotion = false).pulling)
